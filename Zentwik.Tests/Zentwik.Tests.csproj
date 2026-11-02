@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ============================================================
+    Zentwik.Tests —— 业务层的单元测试（批次 A-4）
+    ============================================================
+
+    【为什么是类库而不是 exe】
+    OutputType 用默认值（Library）：xunit 的测试工程由 test host 加载运行，
+    不需要自己的入口点。改成 WinExe/Exe 反而会让 dotnet test 去找 Main。
+
+    【为什么没有 UseWPF / UseWindowsForms / IsAotCompatible】
+    · Core 的红线是「零 WPF 依赖」，测试工程跟着引 WPF 会把一条本该在编译期
+      就红的越界变成静默通过 —— 测试项目的引用图会被误当成 Core 允许的依赖。
+    · 测试跑在 test host 上，不进最终产物，AOT 分析与它无关；开 IsAotCompatible
+      只会把测试代码里的反射/动态写法报成警告，与产品能否 AOT 发布无关。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Zentwik.Core\Zentwik.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>
