@@ -1,6 +1,6 @@
 # Zenwik
 
-AMD Ryzen 处理器轻量化本地调校工具。可调整核心电压（Curve Optimizer）、频率上限（FMax）与功耗墙（PPT / TDC / EDC / 温度墙），并基于 CPU Sets 自行绑定应用进程所用核心。
+AMD Ryzen 处理器轻量化本地调校工具。可调整核心电压（Curve Optimizer）与频率上限（FMax），并基于 CPU Sets 自行绑定应用进程所用核心。
 
 *使用前请确保本机已安装 .NET 10 Runtime 和 PawnIO。*
 
@@ -16,7 +16,7 @@ AMD Ryzen 处理器轻量化本地调校工具。可调整核心电压（Curve O
 
 ## 界面
 
-- **调校**：Curve Optimizer 逐核偏移、功耗墙四项限制、FMax 频率上限设定。
+- **调校**：Curve Optimizer 逐核偏移、FMax 频率上限设定。
 - **调度**：按进程名将线程绑定至 CCD0、CCD1 或自定义掩码。
 - **日志**：实时日志流。
 - **设置**：主题、开机自启动行为、关闭与托盘行为等。
