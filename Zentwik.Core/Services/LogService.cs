@@ -1,27 +1,27 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Zentwik.Core.Threading;
 
 namespace Zentwik.Core.Services
 {
     /// <summary>
     /// <see cref="ILogService"/> 的默认实现。
     ///
-    /// 写入路径分两条：Debug 级只落盘（高频，进界面会刷屏）；
-    /// 其余级别先进内存集合，再由后台线程每 500ms 成批写文件 ——
-    /// 每条日志都在 UI 线程上 CreateDirectory + AppendAllText 会让界面明显卡顿。
+    /// 写入路径分两条：Debug 级只落盘（高频，进内存缓冲会挤掉真正要看的条目）；
+    /// 其余级别先进内存环形缓冲，再由后台线程每 500ms 成批写文件 ——
+    /// 每条日志都 CreateDirectory + AppendAllText 会让磁盘成为高频路径的瓶颈。
+    ///
+    /// 【本类不持有任何 UI 调度器】
+    /// 内存缓冲由内部锁保护，<see cref="EntryAdded"/> 在写入线程上同步触发。
+    /// 需要回到界面线程由订阅方自己负责 —— 后台进程里根本不存在那个线程。
     /// </summary>
     public sealed class LogService : ILogService, IDisposable
     {
-        private const string LogPrefix = "zentwik-";
-
         /// <summary>
         /// 历史日志文件名前缀。改名前的日志同样要参与留存清理，
         /// 否则它们会永远留在用户目录里，谁都不删。
@@ -30,19 +30,22 @@ namespace Zentwik.Core.Services
 
         private readonly LogOptions _options;
 
-        private readonly IUiDispatcher? _dispatcher;
+        /// <summary>本实例写入的文件前缀，已由 <see cref="LogOptions.Normalize"/> 补齐结尾连字符。</summary>
+        private readonly string _filePrefix;
 
         private readonly TimeProvider _timeProvider;
 
-        private readonly ObservableCollection<LogEntry> _entries = [];
-
-        private readonly ReadOnlyObservableCollection<LogEntry> _entriesView;
+        /// <summary>
+        /// 内存日志环形缓冲。容量由 <see cref="LogOptions.MaxEntries"/> 决定，
+        /// 超出后按 <see cref="LogOptions.TrimBatch"/> 成批丢弃头部。
+        /// 用 Queue 而不是 List：丢掉的是最早的条目，只在一端进出，没有随机访问需求。
+        /// </summary>
+        private readonly Queue<LogEntry> _entries = new();
 
         /// <summary>
-        /// 保护 <see cref="_entries"/> 的并发写入。
+        /// 保护 <see cref="_entries"/> 与四个级别计数器。
         ///
-        /// UI 模式下写入由 <see cref="IUiDispatcher"/> 封送到 UI 线程，天然串行；
-        /// 无 UI 的后台模式（-silent）下，采样线程与轮询线程会并发写同一个集合，
+        /// 采样线程、WMI 回调线程、管道服务线程都会并发写日志，
         /// 不加锁就是随机的「集合已被修改」异常。
         /// </summary>
         private readonly object _entriesGate = new();
@@ -87,14 +90,13 @@ namespace Zentwik.Core.Services
         private int _verbose;
         private int _disposed;
 
-        public LogService(LogOptions options, IUiDispatcher? dispatcher = null, TimeProvider? timeProvider = null)
+        public LogService(LogOptions options, TimeProvider? timeProvider = null)
         {
             ArgumentNullException.ThrowIfNull(options);
 
             _options = options.Normalize();
-            _dispatcher = dispatcher;
+            _filePrefix = _options.FilePrefix;
             _timeProvider = timeProvider ?? TimeProvider.System;
-            _entriesView = new ReadOnlyObservableCollection<LogEntry>(_entries);
             _verbose = _options.Verbose ? 1 : 0;
 
             LogDirectory = _options.Directory;
@@ -109,8 +111,6 @@ namespace Zentwik.Core.Services
 
             _writer.Start();
         }
-
-        public ReadOnlyObservableCollection<LogEntry> Entries => _entriesView;
 
         public event Action<LogEntry>? EntryAdded;
 
@@ -163,7 +163,7 @@ namespace Zentwik.Core.Services
             Flush();
         }
 
-        public LogEntry[] Snapshot()
+        public IReadOnlyList<LogEntry> Snapshot()
         {
             lock (_entriesGate)
                 return [.. _entries];
@@ -172,7 +172,7 @@ namespace Zentwik.Core.Services
         public void Clear()
         {
             // 顺序不能反：先同步清队列并推进代号，再做内存清空与删文件。
-            // 若把代号推进丢到 UI 线程异步执行，写盘线程会趁这个窗口把队列里的
+            // 若把代号推进放到后台异步执行，写盘线程会趁这个窗口把队列里的
             // 旧日志写进刚被删掉的文件 —— 用户点的是「清空」，看到的是旧日志原封不动回来了。
             lock (_fileGate)
             {
@@ -180,11 +180,7 @@ namespace Zentwik.Core.Services
                 _generation++;
             }
 
-            // 集合直接绑在界面列表上，从后台线程改会触发「不支持跨线程修改 SourceCollection」。
-            if (_dispatcher is not null && !_dispatcher.IsCurrentThread)
-                _dispatcher.Post(ClearMemory);
-            else
-                ClearMemory();
+            ClearMemory();
 
             PurgeLogFilesAsync();
         }
@@ -239,10 +235,10 @@ namespace Zentwik.Core.Services
 
                 if (!locked)
                 {
-                    // 拿不到锁就放弃清列表，队列与文件照清 —— 至少下次不会被旧日志淹掉。
+                    // 拿不到锁就放弃清缓冲，队列与文件照清 —— 至少下次不会被旧日志淹掉。
                     // 这里刻意不写日志：写日志本身要拿同一把锁，在一个「已经等不到锁」的
                     // 分支里再去排队，等于把 100ms 变成无限。
-                    System.Diagnostics.Debug.WriteLine("清空日志：等待日志集合超时，已跳过界面清空");
+                    System.Diagnostics.Debug.WriteLine("清空日志：等待内存缓冲超时，已跳过内存清空");
                     return;
                 }
 
@@ -268,12 +264,14 @@ namespace Zentwik.Core.Services
                     if (!Directory.Exists(LogDirectory))
                         return;
 
-                    foreach (string file in Directory.EnumerateFiles(LogDirectory, LogPrefix + "*.log"))
+                    // 按前缀白名单删：只删本实例前缀会漏掉 Worker / 旧版本写的文件，
+                    // 那些文件的句柄不在本进程手里，删除不会失败。
+                    foreach (string file in EnumerateLogFiles())
                         DeleteWithRetry(file);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    // 清盘失败不影响清屏
+                    // 清盘失败不影响清缓冲
                 }
             });
         }
@@ -329,9 +327,15 @@ namespace Zentwik.Core.Services
             }
         }
 
+        /// <summary>
+        /// 枚举本目录下所有属于本产品的日志文件：本实例前缀 + 历史前缀。
+        ///
+        /// 白名单而不是通配 <c>*.log</c>：日志目录是用户可见的普通目录，
+        /// 别人放在里面的 .log 与清理无关，不能被留存策略连带删掉。
+        /// </summary>
         private IEnumerable<string> EnumerateLogFiles()
         {
-            foreach (string file in Directory.EnumerateFiles(LogDirectory, LogPrefix + "*.log"))
+            foreach (string file in Directory.EnumerateFiles(LogDirectory, _filePrefix + "*.log"))
                 yield return file;
 
             foreach (string prefix in LegacyLogPrefixes)
@@ -341,10 +345,17 @@ namespace Zentwik.Core.Services
             }
         }
 
-        private static bool TryParseLogDate(string file, out DateTime date)
+        /// <summary>
+        /// 从 <c>{prefix}{yyyyMMdd}.log</c> 里切出日期段。
+        ///
+        /// 用最后一个连字符切分，而不是第一个：前缀本身可能不带连字符
+        /// （<c>worker-</c> 与 <c>zentwik-</c> 都带，但不保证所有调用方都带），
+        /// 日期段里又不可能出现连字符，从右往左找是唯一稳的切法。
+        /// </summary>
+        internal static bool TryParseLogDate(string file, out DateTime date)
         {
             string name = Path.GetFileNameWithoutExtension(file);
-            int separator = name.IndexOf('-', StringComparison.Ordinal);
+            int separator = name.LastIndexOf('-');
 
             if (separator < 0 || name.Length <= separator + 1)
             {
@@ -375,17 +386,14 @@ namespace Zentwik.Core.Services
                 Message = level == LogLevel.Debug ? message : Clip(message)
             };
 
-            // Debug 只落盘：不进界面集合，也不往 UI 线程封送。
+            // Debug 只落盘：不进内存缓冲，高频条目会把 200 条的窗口瞬间挤空。
             if (level == LogLevel.Debug)
             {
                 EnqueueFile(entry);
                 return;
             }
 
-            if (_dispatcher is not null && !_dispatcher.IsCurrentThread)
-                _dispatcher.Post(() => AddEntry(entry));
-            else
-                AddEntry(entry);
+            AddEntry(entry);
         }
 
         private string Clip(string message)
@@ -404,22 +412,22 @@ namespace Zentwik.Core.Services
         {
             lock (_entriesGate)
             {
-                _entries.Add(entry);
+                _entries.Enqueue(entry);
                 BumpCount(entry.Level, +1);
 
-                // 攒够一批再丢头部，别每条日志都让列表整体下移一次
+                // 攒够一批再丢头部，别每条日志都整体搬一次
                 if (_entries.Count > _options.MaxEntries + _options.TrimBatch)
                 {
                     for (int i = 0; i < _options.TrimBatch && _entries.Count > 0; i++)
                     {
-                        // 丢弃时必须同步减计数，否则界面上的数字会和实际条数对不上
-                        BumpCount(_entries[0].Level, -1);
-                        _entries.RemoveAt(0);
+                        // 丢弃时必须同步减计数，否则查询到的数字会和实际条数对不上
+                        BumpCount(_entries.Peek().Level, -1);
+                        _entries.Dequeue();
                     }
                 }
             }
 
-            // 订阅者回调放到锁外：处理器可能做重操作，没必要占着集合锁
+            // 订阅者回调放到锁外：处理器可能做重操作，没必要占着缓冲锁
             EnqueueFile(entry);
             EntryAdded?.Invoke(entry);
         }
@@ -530,7 +538,7 @@ namespace Zentwik.Core.Services
                         // 资源管理器在我们写着的时候读、删。AppendAllText 默认只给 Read，
                         // 一旦用户点「清空日志」，那个文件就再也删不掉了。
                         using FileStream stream = new(
-                            Path.Combine(LogDirectory, $"{LogPrefix}{group.Key}.log"),
+                            Path.Combine(LogDirectory, $"{_filePrefix}{group.Key}.log"),
                             FileMode.Append,
                             FileAccess.Write,
                             FileShare.ReadWrite | FileShare.Delete);

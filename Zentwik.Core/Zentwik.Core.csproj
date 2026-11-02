@@ -17,10 +17,10 @@
            dotnet build Zentwik.Core -c Release
        只要有人往这里塞了一个 System.Windows 类型，这一步会当场红。
 
-    【为什么 DI 容器不在这里（也不在 App 里）】
-    v1.2.0 起 WPF 线进入封版状态，后续迁 WinUI 3。此时引入容器或 EventBus，
-    等于让即将被重写的 UI 层多一层需要拆的抽象 —— 这一轮刻意保持静态类 +
-    显式传参，迁移时逐类搬过去即可。
+    【容器为什么不在 Core 里创建】
+    容器由宿主创建：UI 进程要按需拉起常驻 Worker，Worker 要能完全脱离界面运行，
+    两者对生命周期的要求不一样。Core 只提供「把服务按什么生命周期登记进去」的入口，
+    不持有容器实例，也就不需要知道自己跑在哪个进程里。
   -->
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
@@ -30,7 +30,7 @@
     <AssemblyName>Zentwik.Core</AssemblyName>
     <LangVersion>latest</LangVersion>
 
-    <!-- 与主程序共用同一套版本号口径（见 Zentwik.csproj 的注释） -->
+    <!-- 版本号口径统一由 Core 维护，各宿主工程不再各写一份 -->
     <Version>2.0.0-can3</Version>
     <FileVersion>2.0.0.0</FileVersion>
     <AssemblyVersion>2.0.0.0</AssemblyVersion>
@@ -61,17 +61,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!--
-      让主程序能访问 internal 成员（MaskNamePolicy / MemoryTrimmer 这类）。
-      不给它们加 public：这些是「只给本产品用」的实现细节，一旦公开就成了
-      WinUI 3 迁移时不敢动的对外契约。InternalsVisibleTo 的代价是 Core 知道
-      调用方程序集名，收益是公开面保持最小。
-    -->
-    <InternalsVisibleTo Include="Zentwik" />
-
     <!-- AOT 探针需要访问 AppJsonContext（internal）与 MemoryTrimmer（internal）
          才能把这两条路径也纳入原生编译验证。只在构建期存在，不随产品发布。 -->
     <InternalsVisibleTo Include="Zentwik.AotProbe" />
+    <InternalsVisibleTo Include="Zentwik.Tests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -126,7 +119,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- 原生依赖与主程序同目录落地（ProjectReference 的 content 会传递到 App 输出）。
+    <!-- 原生依赖随宿主输出同目录落地（ProjectReference 的 content 会传递到输出）。
 
          ExcludeFromSingleFile 是必需的：不写这一条，单文件发布会把这个原生 DLL
          一并塞进 exe，运行时解到 %TEMP%\.net\... 里，而 ZenStates-Core 是按

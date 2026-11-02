@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using Zentwik.Core.Helpers;
@@ -119,10 +118,31 @@ namespace Zentwik.Core.Services
 
         private readonly object Sync = new();
 
-        /// <summary>界面绑定的规则集合。</summary>
-        public ObservableCollection<ScenarioRule> Rules { get; } = new();
+        /// <summary>
+        /// 规则主副本。所有读写都在 <see cref="Sync"/> 保护下进行，
+        /// 对外只通过 <see cref="Rules"/> 返回的副本暴露。
+        /// </summary>
+        private readonly List<ScenarioRule> _rules = new();
 
-        /// <summary>规则或总闸变化时触发。</summary>
+        /// <summary>
+        /// 规则集合的只读快照。
+        ///
+        /// 【为什么返回副本而不是原集合】
+        /// <see cref="Notify"/> 由 WMI 回调线程调用，保存/删除来自其它线程。
+        /// 把可变集合直接交出去，等于让调用方在别人改写时遍历它 ——
+        /// 这正是偶发 InvalidOperationException 的来源。规则数量是个位数，
+        /// 每次复制一份的代价远低于一个偶发并发故障。
+        /// </summary>
+        public IReadOnlyList<ScenarioRule> Rules
+        {
+            get
+            {
+                lock (Sync)
+                    return _rules.ToArray();
+            }
+        }
+
+        /// <summary>规则或总闸变化时触发，在触发变化的那条线程上同步调用。</summary>
         public event Action? Changed;
 
         /// <summary>
@@ -147,7 +167,7 @@ namespace Zentwik.Core.Services
             get
             {
                 lock (Sync)
-                    return Rules.Any(r => r.Enabled && r.Trigger == ScenarioTrigger.ProcessRunning);
+                    return _rules.Any(r => r.Enabled && r.Trigger == ScenarioTrigger.ProcessRunning);
             }
         }
 
@@ -157,21 +177,10 @@ namespace Zentwik.Core.Services
             get
             {
                 lock (Sync)
-                    return Rules.Any(r => r.Enabled &&
+                    return _rules.Any(r => r.Enabled &&
                         (r.Trigger == ScenarioTrigger.OnBattery || r.Trigger == ScenarioTrigger.OnAcPower));
             }
         }
-
-        /// <summary>
-        /// UI 线程的同步上下文，由 App.xaml.cs 在启动时注入（与 LogService.UiContext 同一处）。
-        ///
-        /// 【为什么需要它】
-        /// 场景切换的调用方是后台的进程事件 / 电源通知线程，而切换最终要动
-        /// ProfileService 里那个 ObservableCollection —— 跨线程改集合是直接抛
-        /// InvalidOperationException 的。封送责任放在后台入口这一侧：
-        /// 谁把调用带到了别的线程，谁负责把它送回来。
-        /// </summary>
-        public SynchronizationContext? UiContext { get; set; }
 
         public void Load()
         {
@@ -189,20 +198,11 @@ namespace Zentwik.Core.Services
 
                 Enabled = file?.Enabled ?? false;
 
-                // 增量对齐，不用 Clear 重建（Clear 的 Reset 通知会让列表整列闪烁）
-                List<ScenarioRule> desired = file?.Rules ?? new List<ScenarioRule>();
-                for (int i = Rules.Count - 1; i >= 0; i--)
-                    if (!desired.Any(r => r.Id == Rules[i].Id))
-                        Rules.RemoveAt(i);
-
-                for (int i = 0; i < desired.Count; i++)
-                {
-                    int index = IndexOfId(desired[i].Id);
-                    if (index == -1)
-                        Rules.Insert(i, desired[i]);
-                    else if (index != i)
-                        Rules.Move(index, i);
-                }
+                // 整批替换而不是增量对齐：集合通知成本已经不存在，
+                // 「谁在哪个下标」也不再对外可见，替换是唯一不会留下中间态的做法。
+                _rules.Clear();
+                if (file?.Rules != null)
+                    _rules.AddRange(file.Rules);
             }
 
             Changed?.Invoke();
@@ -231,9 +231,9 @@ namespace Zentwik.Core.Services
             {
                 int index = IndexOfId(rule.Id);
                 if (index >= 0)
-                    Rules[index] = rule;
+                    _rules[index] = rule;
                 else
-                    Rules.Add(rule);
+                    _rules.Add(rule);
 
                 Persist();
             }
@@ -249,7 +249,7 @@ namespace Zentwik.Core.Services
                 if (index < 0)
                     return false;
 
-                Rules.RemoveAt(index);
+                _rules.RemoveAt(index);
                 Persist();
             }
 
@@ -268,6 +268,11 @@ namespace Zentwik.Core.Services
         ///     转成 ProcessRunning 触发传入；
         ///   · 电源：系统电源模式变更通知回调时，按当前供电状态传 OnBattery / OnAcPower。
         ///
+        /// 【线程模型】
+        /// 纯同步方法，可在任意线程调用（WMI 回调线程直接调用即可）。
+        /// 它不会再向任何 UI 线程封送：内部集合的并发安全由 <see cref="Sync"/> 保证，
+        /// 需要回到界面线程刷新界面是订阅 <see cref="Changed"/> 的一方自己的责任。
+        ///
         /// 【尚未做的防抖】
         /// 游戏启动会瞬间拉起十几个子进程，逐个通知会触发十几次评估。
         /// 实装时应在调用侧合并（同一次扫描只调一次），而不是在这里加延时 ——
@@ -277,14 +282,6 @@ namespace Zentwik.Core.Services
         {
             if (!Enabled)
                 return;
-
-            // 后台线程进来就原样封送一次再走：后面的评估与切换都要动 UI 侧的集合。
-            if (UiContext != null && SynchronizationContext.Current != UiContext)
-            {
-                List<(ScenarioTrigger Trigger, string Argument)> copy = active.ToList();
-                UiContext.Post(_ => Notify(copy), null);
-                return;
-            }
 
             string? target = Resolve(active);
 
@@ -324,7 +321,7 @@ namespace Zentwik.Core.Services
 
             lock (Sync)
             {
-                return Rules
+                return _rules
                     .Where(rule => rule.Enabled && Matches(rule, snapshot))
                     .OrderBy(rule => rule.Priority)
                     .Select(rule => rule.ProfileId)
@@ -375,8 +372,8 @@ namespace Zentwik.Core.Services
 
         private int IndexOfId(string id)
         {
-            for (int i = 0; i < Rules.Count; i++)
-                if (Rules[i].Id == id)
+            for (int i = 0; i < _rules.Count; i++)
+                if (_rules[i].Id == id)
                     return i;
             return -1;
         }
@@ -388,7 +385,7 @@ namespace Zentwik.Core.Services
                 JsonFile.Write(FilePath, new ScenarioFile
                 {
                     Enabled = Enabled,
-                    Rules = Rules.ToList()
+                    Rules = _rules.ToList()
                 }, AppJsonContext.Default.ScenarioFile);
             }
             catch (Exception ex)

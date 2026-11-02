@@ -1,20 +1,23 @@
 using System;
-using System.Collections.ObjectModel;
+using System.Collections.Generic;
 
 namespace Zentwik.Core.Services
 {
     /// <summary>
-    /// 日志服务：内存集合（供界面绑定）+ 按天滚动的日志文件。
+    /// 日志服务：内存环形缓冲（供只读查询）+ 按天滚动的日志文件。
     ///
-    /// 实现方保证所有写操作最终在 UI 线程落到 <see cref="Entries"/>，
-    /// 调用方可以在任意线程直接调用写方法。
+    /// 调用方可以在任意线程直接调用写方法，不需要任何 UI 线程调度器：
+    /// 内存缓冲由内部锁保护，<see cref="EntryAdded"/> 在写入线程上同步触发，
+    /// 订阅方自行负责切回自己的线程。
     /// </summary>
     public interface ILogService
     {
-        /// <summary>界面绑定的日志集合。只读使用，不要从外部增删。</summary>
-        ReadOnlyObservableCollection<LogEntry> Entries { get; }
-
-        /// <summary>新增一条日志后在 UI 线程触发。</summary>
+        /// <summary>
+        /// 新增一条日志后触发，在写入线程上同步调用。
+        ///
+        /// 不在这里做线程封送：Core 不持有任何 UI 调度器，
+        /// 需要回到界面线程是订阅方（View 层）的责任。
+        /// </summary>
         event Action<LogEntry>? EntryAdded;
 
         /// <summary>是否记录 <see cref="LogLevel.Debug"/> 级详细日志。</summary>
@@ -26,7 +29,7 @@ namespace Zentwik.Core.Services
         /// </summary>
         bool Paused { get; set; }
 
-        /// <summary>内存集合当前条数。</summary>
+        /// <summary>内存缓冲当前条数。</summary>
         int Count { get; }
 
         long CountInfo { get; }
@@ -39,7 +42,7 @@ namespace Zentwik.Core.Services
 
         string LogDirectory { get; }
 
-        /// <summary>详细日志，仅在 <see cref="Verbose"/> 为真时写入。</summary>
+        /// <summary>详细日志，仅在 <see cref="Verbose"/> 为真时写入。只落盘，不进内存缓冲。</summary>
         void Debug(string message);
 
         void Info(string message);
@@ -51,16 +54,16 @@ namespace Zentwik.Core.Services
         /// <summary>致命错误。写入后立刻冲刷磁盘 —— 走到这里时进程可能下一行就没了。</summary>
         void Critical(string message);
 
-        /// <summary>清空内存集合、待写队列与磁盘文件。</summary>
+        /// <summary>清空内存缓冲、待写队列与磁盘文件。</summary>
         void Clear();
 
         /// <summary>把待写队列立刻刷到磁盘。退出前调用，避免丢最后几条。</summary>
         void Flush();
 
         /// <summary>
-        /// 取当前日志的副本。导出与自检必须走这个方法：
-        /// 直接遍历 <see cref="Entries"/> 会在后台写入时抛「集合已被修改」。
+        /// 取当前内存日志的只读副本。导出、自检、界面列表刷新都必须走这个方法：
+        /// 它返回的是一份快照，遍历期间后台继续写不会抛「集合已被修改」。
         /// </summary>
-        LogEntry[] Snapshot();
+        IReadOnlyList<LogEntry> Snapshot();
     }
 }

@@ -3,7 +3,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Zentwik.Core.Helpers;
 using Zentwik.Core.Services;
-using Zentwik.Core.Threading;
 
 namespace Zentwik.Core.DependencyInjection
 {
@@ -11,23 +10,22 @@ namespace Zentwik.Core.DependencyInjection
     /// Core 的服务注册入口。
     ///
     /// Core 只引用 <c>Microsoft.Extensions.DependencyInjection.Abstractions</c>，
-    /// 不引用 Hosting：容器由宿主（WinUI 3 / WPF / 控制台自检）创建，
+    /// 不引用 Hosting：容器由宿主（UI 进程 / Worker 进程 / 自检工具）创建，
     /// Core 只负责「把服务按什么生命周期登记进去」。
     /// </summary>
     public static class ServiceCollectionExtensions
     {
         /// <summary>
         /// 注册 Core 的全部服务。
+        ///
+        /// 【没有 dispatcher 形参】
+        /// Core 不持有任何 UI 线程调度器：日志与场景服务的内部集合由各自的锁保证
+        /// 并发安全，通知以纯 C# 事件在原线程上同步触发。需要回到界面线程由 UI 进程负责。
         /// </summary>
         /// <param name="services">宿主容器。</param>
-        /// <param name="dispatcher">
-        /// UI 线程调度器。WinUI 3 传 <c>DispatcherQueue.AsSynchronizationContext()</c> 包出来的实例；
-        /// 无界面的后台进程（-silent）传 null，日志将不再跨线程封送。
-        /// </param>
-        /// <param name="configureLog">日志参数。为 null 时使用默认值（临时目录、200 条上限）。</param>
+        /// <param name="configureLog">日志参数。为 null 时使用默认值（临时目录、200 条上限、zentwik- 前缀）。</param>
         public static IServiceCollection AddZentwikCore(
             this IServiceCollection services,
-            IUiDispatcher? dispatcher = null,
             Action<LogOptions>? configureLog = null)
         {
             ArgumentNullException.ThrowIfNull(services);
@@ -53,12 +51,9 @@ namespace Zentwik.Core.DependencyInjection
                 if (string.IsNullOrWhiteSpace(options.Directory))
                     options.Directory = provider.GetRequiredService<IAppPaths>().Logs;
 
-                return new LogService(options, dispatcher);
+                return new LogService(options);
             });
             services.TryAddSingleton<ILogService>(provider => provider.GetRequiredService<LogService>());
-
-            if (dispatcher is not null)
-                services.TryAddSingleton(dispatcher);
 
             // ---------- 持久化 ----------
             // 先登记具体类型，再把接口映射到同一个实例：

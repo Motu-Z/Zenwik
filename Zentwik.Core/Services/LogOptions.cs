@@ -35,6 +35,18 @@ namespace Zentwik.Core.Services
         /// </summary>
         public int MaxMessageChars { get; set; } = 2000;
 
+        /// <summary>
+        /// 日志文件名前缀，实际文件名为 <c>{FilePrefix}{yyyyMMdd}.log</c>。
+        ///
+        /// 【为什么必须是可配置项】
+        /// 双进程架构下 UI 与 Worker 共用 <c>%AppData%\Zentwik\Logs</c> 一个目录。
+        /// 若两边写同一个文件名，先打开的那个持有追加句柄，后者每次写入都要
+        /// 撞 FileShare 竞争 —— 表现为随机丢日志或随机抛 IOException。
+        /// 用前缀把两个进程的文件彻底分开：UI 用 <c>zentwik-</c>，Worker 用 <c>worker-</c>，
+        /// 留存清理按前缀白名单同时收两条线。
+        /// </summary>
+        public string FilePrefix { get; set; } = "zentwik-";
+
         /// <summary>日志文件留存天数，超期的在启动时删除。</summary>
         public int RetentionDays { get; set; } = 14;
 
@@ -49,6 +61,7 @@ namespace Zentwik.Core.Services
             return new LogOptions
             {
                 Directory = string.IsNullOrWhiteSpace(Directory) ? Path.GetTempPath() : Directory,
+                FilePrefix = NormalizePrefix(FilePrefix),
                 MaxEntries = MaxEntries > 0 ? MaxEntries : 200,
                 TrimBatch = TrimBatch > 0 ? TrimBatch : 32,
                 MaxMessageChars = MaxMessageChars > 0 ? MaxMessageChars : 2000,
@@ -56,6 +69,20 @@ namespace Zentwik.Core.Services
                 MaxPendingEntries = MaxPendingEntries > 0 ? MaxPendingEntries : 800,
                 Verbose = Verbose
             };
+        }
+
+        /// <summary>
+        /// 前缀一律补上结尾的 <c>-</c>。文件名解析靠「最后一个连字符」切出日期段，
+        /// 前缀不带连字符时 <c>worker20261101.log</c> 无从判断哪一段是日期，
+        /// 留存清理会把这些文件当成永远不过期的垃圾留在目录里。
+        /// </summary>
+        private static string NormalizePrefix(string? prefix)
+        {
+            if (string.IsNullOrWhiteSpace(prefix))
+                return "zentwik-";
+
+            string trimmed = prefix.Trim();
+            return trimmed.EndsWith('-') ? trimmed : trimmed + "-";
         }
     }
 }

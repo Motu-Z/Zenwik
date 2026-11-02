@@ -51,8 +51,22 @@ namespace Zentwik.Core.Services
         /// <summary>登录后延时秒数。</summary>
         private const int DelaySeconds = 15;
 
-        /// <summary>静默模式启动参数。</summary>
-        public const string SilentArgument = "-silent";
+        /// <summary>
+        /// 登录自启的启动参数：拉起 Worker 后由 Worker 再把 UI 叫起来。
+        ///
+        /// 【为什么不是 -silent】
+        /// 双进程架构下任务只负责拉起 Worker（常驻 + 写 SMU），「要不要显示界面」是
+        /// Worker 启动后按配置决定的事，不再是启动参数能表达的语义。旧常量
+        /// <c>SilentArgument = "-silent"</c> 在 Worker 侧没有任何解析点（`Program.Main`
+        /// 只把 args 交给 `Host.CreateApplicationBuilder`），属于死代码。
+        /// 批次五实测 `Zentwik.Worker.exe -silent` **不会崩**（进程存活、管道 ping 通、
+        /// `startup_crash.log` 无新增），所以删除理由是「语义无效」而不是「会崩」。
+        ///
+        /// 【为什么是 --open-ui 而不是 IPC 的 open-ui】
+        /// 这里是**命令行开关**，不是管道命令。管道命令 `WorkerPipeContract.CommandOpenUi`
+        /// 的值是 `"open-ui"`（无横线），两者不可混用：一个是进程启动参数，一个是协议字段。
+        /// </summary>
+        public const string OpenUiArgument = "--open-ui";
 
         /// <summary>
         /// 读取 schtasks 输出用的编码。
@@ -126,7 +140,7 @@ namespace Zentwik.Core.Services
             {
                 tempXml = Path.Combine(Path.GetTempPath(), $"Zentwik-AutoStart-{Guid.NewGuid():N}.xml");
 
-                string xml = BuildTaskXml(exePath, SilentArgument, userId);
+                string xml = BuildTaskXml(exePath, OpenUiArgument, userId);
                 // UTF-16 + BOM：schtasks /XML 最稳定的编码
                 File.WriteAllText(tempXml, xml, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
 
@@ -148,8 +162,8 @@ namespace Zentwik.Core.Services
                 }
 
                 _log.Info(
-                    $"计划任务 {TaskName} 创建成功：用户 {userId} · 登录后延时 {DelaySeconds} 秒 · 最高权限 · 静默启动 " +
-                    $"（{exePath} {SilentArgument}）");
+                    $"计划任务 {TaskName} 创建成功：用户 {userId} · 登录后延时 {DelaySeconds} 秒 · 最高权限 · 登录后拉起 UI " +
+                    $"（{exePath} {OpenUiArgument}）");
 
                 // 把「下次运行时间 / 上次结果 / 运行方式」写进日志。
                 // 用户下次开机发现没起来时，这三个字段直接指出是没触发还是启动后崩了。
@@ -192,7 +206,7 @@ namespace Zentwik.Core.Services
                 (int exitCode, string output) = RunSchtasks($"/Delete /TN \"{TaskName}\" /F");
                 if (exitCode == 0)
                 {
-                    _log.Info($"计划任务 {TaskName} 已删除（开机静默自启已关闭）");
+                    _log.Info($"计划任务 {TaskName} 已删除（开机自启已关闭）");
                     return true;
                 }
 
@@ -209,8 +223,8 @@ namespace Zentwik.Core.Services
         /// <summary>
         /// 构造任务定义 XML。
         /// </summary>
-        /// <param name="exePath">Zentwik.exe 完整路径。</param>
-        /// <param name="arguments">启动参数（-silent）。</param>
+        /// <param name="exePath">Worker 可执行文件完整路径（`Environment.ProcessPath` 的解析结果）。</param>
+        /// <param name="arguments">启动参数（<see cref="OpenUiArgument"/>）。</param>
         /// <param name="userId">当前用户 SID 或 DOMAIN\User；触发器和主体必须用同一份。</param>
         private string BuildTaskXml(string exePath, string arguments, string userId)
         {
@@ -224,7 +238,7 @@ namespace Zentwik.Core.Services
                     new XElement(ns + "RegistrationInfo",
                         new XElement(ns + "Author", "Zentwik"),
                         new XElement(ns + "Description",
-                            "Zentwik 登录静默自启：延时 15 秒后以最高权限重新应用 CO / FMax 并启动进程绑核监听。")),
+                            "Zentwik 登录自启：延时 15 秒后以最高权限启动后台服务（重新应用 CO / FMax、启动进程绑核监听），随后打开主界面。")),
 
                     // 触发器：该用户登录，延时 15 秒。
                     // UserId 必须写 —— 只写 Enabled + Delay 在组主体任务上永远不触发。
@@ -263,7 +277,7 @@ namespace Zentwik.Core.Services
                         new XElement(ns + "WakeToRun", "false"),
                         new XElement(ns + "ExecutionTimeLimit", "PT0S")),         // 不限时长
 
-                    // 动作：静默启动
+                    // 动作：拉起 Worker（Worker 再按配置决定是否开 UI）
                     new XElement(ns + "Actions",
                         new XAttribute("Context", "Author"),
                         new XElement(ns + "Exec",

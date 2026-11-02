@@ -21,8 +21,8 @@ namespace Zentwik.Core.Services
     ///      并按 PID 缓存。<b>解析失败会退避重试</b>，见 <see cref="ResolvePath"/>。
     ///   3. CPU 占用率用 <c>GetProcessTimes</c> 做<b>滑动窗口平均</b>，见 <see cref="ComputeCpu"/>。
     ///
-    /// 采样跑在后台线程上（旧实现用 DispatcherTimer，整轮 Toolhelp 遍历与对每个进程的
-    /// OpenProcess 都压在 UI 线程，是列表掉帧的直接原因）。
+    /// 采样跑在独立后台线程上（旧实现把整轮 Toolhelp 遍历与对每个进程的
+    /// OpenProcess 都压在主线程，是消费方列表掉帧的直接原因）。
     ///
     /// 生命周期：应用启动即开始周期采样，调度页打开后直接消费最新快照。
     /// </summary>
@@ -174,17 +174,16 @@ namespace Zentwik.Core.Services
         /// <summary>
         /// 「有人在看」的唤醒事件。计数从 0 变 1 时置位，采样线程随即醒来。
         ///
-        /// 【为什么改成「专用 STA 线程 + AutoResetEvent」而不是 Task.Run 循环】
-        /// 旧实现用 Task.Run 跑异步循环，采样过程在线程池线程（MTA）上完成。
-        /// 纯 Win32 调用不受影响，但只要有任何一个订阅方在回调里碰到了 WPF 对象
-        /// （哪怕只是读一个 DependencyProperty），立刻抛
-        /// 「调用线程必须为 STA，因为许多 UI 组件都需要」。
-        /// 这个异常发生在【采样线程】内部，被循环体的 catch 吞成一条 WARN，
-        /// 于是表现成「每隔几秒一条 WARN + 列表永远不更新」，而堆栈里看不到任何 UI 代码。
+        /// 【为什么是「专用后台线程 + AutoResetEvent」而不是 Task.Run 循环】
+        /// 旧实现用 Task.Run 跑异步循环，循环里没有任何等待原语可被打断，
+        /// 于是「没人看时彻底停采样」这件事根本做不到 —— 停下来的只有引用计数，
+        /// 线程仍然按周期醒着遍历全系统进程，属于纯粹的常驻浪费。
         ///
-        /// 现在：一条命名后台线程，显式设成 STA，采样与回调都在它上面串行发生。
-        /// 【但订阅方仍必须自己 Dispatcher.BeginInvoke 回 UI 线程】——
-        /// STA 只解决「单元状态」，不解决「这不是 UI 线程」。
+        /// 现在：一条命名后台线程 + AutoResetEvent，采样与回调都在它上面串行发生。
+        /// 线程单元状态设为 MTA：纯后台无消息泵，不需要 STA。
+        ///
+        /// 【订阅方必须自己切回自己的线程再碰控件】
+        /// 事件在采样线程上同步触发，这里不做任何封送：常驻进程里没有可封送的界面线程。
         /// 见 ProcessBindingPage.OnProcessesRefreshed。
         ///
         /// 【必须是 AutoResetEventSlim，不能是 ManualResetEventSlim】
@@ -313,9 +312,9 @@ namespace Zentwik.Core.Services
         /// <summary>
         /// 采样完成事件（携带本轮快照）。
         ///
-        /// 【在采样线程（STA 后台线程）上同步触发】
-        /// 订阅方必须自行 Dispatcher.BeginInvoke 回 UI 线程再动任何控件或集合。
-        /// 这里不做封送，是因为本类要能在没有 Dispatcher 的纯后台模式（-silent）下工作。
+        /// 【在采样线程（MTA 后台线程）上同步触发】
+        /// 订阅方必须自行切回自己的线程再动任何控件或集合。
+        /// 这里不做封送，是因为本类要能在完全没有界面线程的常驻进程里工作。
         /// </summary>
         public event Action<IReadOnlyList<Entry>>? Refreshed;
 
@@ -366,11 +365,10 @@ namespace Zentwik.Core.Services
                 Priority = ThreadPriority.BelowNormal,
             };
 
-            // 【必须是 STA】
-            // 见 _watchSignal 的注释：MTA 线程上一旦碰到 WPF 对象就是
-            //「调用线程必须为 STA」。把它设成 STA 之后，这类问题从「必然崩溃」
-            // 变成「只是不该这么做」，采样链路本身也不会再因为单元状态被带崩。
-            thread.SetApartmentState(ApartmentState.STA);
+            // 【MTA：纯后台无消息泵，不需要 STA】
+            // 采样线程只做 Win32 调用与托管集合写入，不创建窗口、不跑消息循环。
+            // STA 只对需要单元亲和性的 COM / 界面组件有意义，这里不存在那种对象。
+            thread.SetApartmentState(ApartmentState.MTA);
             _samplerThread = thread;
             thread.Start();
         }
@@ -378,7 +376,7 @@ namespace Zentwik.Core.Services
         /// <summary>
         /// 请求「现在立刻采一帧」，用于刚打开列表时不要干等一个完整周期。
         ///
-        /// 排队而不是直接同步执行：采样必须在采样线程上跑（STA + 串行），
+        /// 排队而不是直接同步执行：采样必须在采样线程上跑（MTA + 串行），
         /// 在 UI 线程上同步 Collect 会把几百次 OpenProcess 压到界面上。
         /// </summary>
         public void RequestSample()

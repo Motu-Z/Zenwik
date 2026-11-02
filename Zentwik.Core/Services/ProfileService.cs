@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using Zentwik.Core.Helpers;
@@ -18,14 +17,13 @@ namespace Zentwik.Core.Services
     /// 中途崩一次就是「负压是新方案的、绑核还是旧方案的」，这种半套状态最难排查。
     /// 所以方案 = 一份完整快照，切换 = 一次性把三个 store 写回成快照里的值。
     ///
-    /// 【刻意不进快照的三项（v1.1.x 后半段的扩展点）】
-    /// 电源策略、升频模式、核心停放目前由 ProcessorPowerPolicy / ProcessorPowerTuning
-    /// 直接读写电源方案与注册表，它们的「读回来做快照」语义还没定
-    /// （电源方案是 GUID、升频模式是位域、核心停放是百分比，回滚时要不要先读旧值？）。
-    /// 现在把字段定死，等于逼着 v1.1.x 为了兼容这些字段去改写那两个已经稳定的类。
-    /// 这里留空，等那两个类提供 CurrentValue 快照接口后再加。
+    /// 【为什么快照里没有电源项】
+    /// 电源策略、升频模式、核心停放已从 Core 移除（批次 A-2）：它们直接读写电源方案
+    /// 与注册表，与「只碰 SMU + 调度」的职责边界不一致。要恢复这类能力，应作为独立
+    /// 子系统重新引入，而不是往本快照里塞字段 —— 字段一旦写进 profiles.json，
+    /// 删字段就要处理老配置的反序列化兼容。
     /// </summary>
-    public sealed class ProfileSnapshot : System.ComponentModel.INotifyPropertyChanged
+    public sealed class ProfileSnapshot
     {
         /// <summary>方案 Id（32 位无横线 GUID）。改名不改 Id —— 场景规则引用的是 Id。</summary>
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -33,33 +31,18 @@ namespace Zentwik.Core.Services
         /// <summary>
         /// 这一份是否当前生效中。
         ///
-        /// 【为什么放在数据模型上，而不是让界面自己记】
-        /// 生效状态会被场景自动切换在后台改掉 —— 界面没参与那次切换，
-        /// 自己记的那份立刻就过时了。放在模型上，由 ProfileService 统一刷新，
-        /// 界面只需要一个 DataTrigger。
+        /// 【为什么放在数据模型上，而不是让调用方自己记】
+        /// 生效状态会被场景自动切换在后台改掉 —— 调用方没参与那次切换，
+        /// 自己记的那份立刻就过时了。由 <see cref="ProfileService"/> 统一刷新，
+        /// 消费方在 <see cref="ProfileService.Changed"/> 之后重新取列表即可。
         ///
-        /// 【为什么实现 INotifyPropertyChanged】
-        /// ObservableCollection 只管集合的增删，不管元素属性变化。
-        /// 切换方案时集合一条没动，变的只是哪个元素的 IsActive 为真；
-        /// 不发属性通知，界面上的「生效中」标记就永远停在第一份方案上。
+        /// 【为什么只是一个普通属性】
+        /// 快照表达的是「某一刻的完整状态」，批量重建时整批替换，不逐项改属性。
+        /// 逐项发 PropertyChanged 会让一次切换退化成 N 次界面刷新，
+        /// 而通知源可能来自后台线程 —— 封送责任又会绕回到 Core 里，得不偿失。
         /// </summary>
         [System.Text.Json.Serialization.JsonIgnore]
-        public bool IsActive
-        {
-            get => _isActive;
-            set
-            {
-                if (_isActive == value)
-                    return;
-
-                _isActive = value;
-                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsActive)));
-            }
-        }
-
-        private bool _isActive;
-
-        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public bool IsActive { get; set; }
 
         public string Name { get; set; } = string.Empty;
 
@@ -129,10 +112,27 @@ namespace Zentwik.Core.Services
 
         private readonly object Sync = new();
 
-        /// <summary>界面绑定的集合。方案数量是个位数到几十，不需要虚拟化，但更新仍走增量。</summary>
-        public ObservableCollection<ProfileSnapshot> Items { get; } = new();
+        /// <summary>方案主副本。所有读写都在 <see cref="Sync"/> 保护下进行。</summary>
+        private readonly List<ProfileSnapshot> _items = new();
 
-        /// <summary>方案集合发生变化（增删改、切换生效）时触发，界面据此刷新。</summary>
+        /// <summary>
+        /// 方案列表的只读快照。
+        ///
+        /// 【为什么返回副本】
+        /// <see cref="Apply"/> 可能被场景服务在 WMI 回调线程上调用，而消费方在
+        /// 别的线程上遍历列表。把可变集合直接交出去就是偶发的「集合已被修改」。
+        /// 方案数量是个位数到几十，复制成本可以忽略。
+        /// </summary>
+        public IReadOnlyList<ProfileSnapshot> Items
+        {
+            get
+            {
+                lock (Sync)
+                    return _items.ToArray();
+            }
+        }
+
+        /// <summary>方案集合发生变化（增删改、切换生效）时触发，在触发线程上同步调用。</summary>
         public event Action? Changed;
 
         /// <summary>当前生效方案的 Id；没有（启动后未切换过任何方案）时为 null。</summary>
@@ -144,7 +144,7 @@ namespace Zentwik.Core.Services
         /// </summary>
         private void RefreshActiveMarks()
         {
-            foreach (ProfileSnapshot snapshot in Items)
+            foreach (ProfileSnapshot snapshot in _items)
                 snapshot.IsActive = snapshot.Id == ActiveId;
         }
 
@@ -166,9 +166,10 @@ namespace Zentwik.Core.Services
                 List<ProfileSnapshot> loaded = file?.Profiles ?? new List<ProfileSnapshot>();
                 ActiveId = file?.ActiveId;
 
-                // 增量对齐而不是 Clear() 重建：Clear 会让列表重建全部可视容器，
-                // 表现为一次闪烁 + 滚动弹回顶部（v1.0.3 在日志列表上修过同一个问题）。
-                MergeInto(loaded);
+                // 整批替换：快照不再带属性通知，增量对齐已失去意义，
+                // 而且替换过程中不会出现「一半新一半旧」的可见中间态。
+                _items.Clear();
+                _items.AddRange(loaded);
                 RefreshActiveMarks();
             }
 
@@ -179,7 +180,7 @@ namespace Zentwik.Core.Services
         public ProfileSnapshot? FindById(string id)
         {
             lock (Sync)
-                return Items.FirstOrDefault(p => p.Id == id);
+                return _items.FirstOrDefault(p => p.Id == id);
         }
 
         /// <summary>
@@ -215,11 +216,11 @@ namespace Zentwik.Core.Services
 
             lock (Sync)
             {
-                int index = Items.ToList().FindIndex(p => p.Id == snapshot.Id);
+                int index = _items.FindIndex(p => p.Id == snapshot.Id);
                 if (index >= 0)
-                    Items[index] = snapshot;
+                    _items[index] = snapshot;
                 else
-                    Items.Add(snapshot);
+                    _items.Add(snapshot);
 
                 Persist();
             }
@@ -233,11 +234,11 @@ namespace Zentwik.Core.Services
         {
             lock (Sync)
             {
-                ProfileSnapshot? target = Items.FirstOrDefault(p => p.Id == id);
+                ProfileSnapshot? target = _items.FirstOrDefault(p => p.Id == id);
                 if (target == null)
                     return false;
 
-                Items.Remove(target);
+                _items.Remove(target);
 
                 // 刻意不回滚硬件：删掉一份方案只是不再留着这张卡片，
                 // 用户没说「把机器恢复原样」—— 那是「清除全部数据」的职责。
@@ -335,47 +336,13 @@ namespace Zentwik.Core.Services
                 .Any();
         }
 
-        /// <summary>
-        /// 把给定列表增量对齐到 <see cref="Items"/>。
-        ///
-        /// 【为什么不用 Clear + Add】
-        /// Clear 会发一次 Reset 通知，列表重建全部可视容器：闪一下、滚动位置丢。
-        /// 这里是配置页，方案只有几条，但规矩就是规矩 —— 顺手的地方最容易破例，
-        /// 破了例下次在进程列表上也会这么写。
-        /// </summary>
-        private void MergeInto(List<ProfileSnapshot> desired)
-        {
-            for (int i = Items.Count - 1; i >= 0; i--)
-            {
-                if (!desired.Any(p => p.Id == Items[i].Id))
-                    Items.RemoveAt(i);
-            }
-
-            for (int i = 0; i < desired.Count; i++)
-            {
-                int index = IndexOfId(desired[i].Id);
-                if (index == -1)
-                    Items.Insert(i, desired[i]);
-                else if (index != i)
-                    Items.Move(index, i);
-            }
-        }
-
-        private int IndexOfId(string id)
-        {
-            for (int i = 0; i < Items.Count; i++)
-                if (Items[i].Id == id)
-                    return i;
-            return -1;
-        }
-
         private void Persist()
         {
             try
             {
                 JsonFile.Write(FilePath, new ProfileFile
                 {
-                    Profiles = Items.ToList(),
+                    Profiles = _items.ToList(),
                     ActiveId = ActiveId
                 }, AppJsonContext.Default.ProfileFile);
             }
