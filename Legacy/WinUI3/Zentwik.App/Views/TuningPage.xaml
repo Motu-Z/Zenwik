@@ -88,17 +88,27 @@
                             <FontIcon Glyph="&#xE72C;" FontSize="14" />
                         </Button>
 
+                        <!-- 主标题只放型号，规格与 SMU 状态下沉到副标题。
+                             后端 CpuName 是一整串 "AMD Ryzen 9 9955HX 16-Core Processor"，
+                             挤在一行会被截断；契约 v1.6 的 CpuTitle / CpuDetail 就是拆好的两段：
+                             CpuTitle = 型号，CpuDetail = 规格 · SMU 状态。
+                             CpuSubText（核心代号 / SMU 版本）降级为副标题的悬浮提示，不丢信息。 -->
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock Text="{x:Bind ViewModel.CpuName, Mode=OneWay}"
-                                       Style="{StaticResource AppCpuName}" />
-                            <TextBlock Text="{x:Bind ViewModel.CpuSubText, Mode=OneWay}"
+                            <TextBlock Text="{x:Bind ViewModel.CpuTitle, Mode=OneWay}"
+                                       Style="{StaticResource AppCpuName}"
+                                       TextWrapping="Wrap"
+                                       MaxLines="2"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{x:Bind ViewModel.CpuDetail, Mode=OneWay}"
                                        Style="{StaticResource AppDesc}"
                                        Margin="0,4,0,0"
-                                       TextWrapping="NoWrap"
-                                       TextTrimming="CharacterEllipsis" />
+                                       TextWrapping="Wrap"
+                                       MaxLines="2"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTipService.ToolTip="{x:Bind ViewModel.CpuSubText, Mode=OneWay}" />
                         </StackPanel>
 
-                        <!-- 方案下拉 + 应用：一组操作，间距 8，统一 34px 高 -->
+                        <!-- 方案下拉 + 应用：一组操作，间距 8，高度对齐 AppComboHeight -->
                         <StackPanel Grid.Column="2"
                                     Orientation="Horizontal"
                                     Spacing="8"
@@ -118,7 +128,7 @@
                                            Visibility="{x:Bind local:UiConverters.ToVisibleWhenTrue(ViewModel.IsDraftDirty)}" />
                             </Grid>
                             <Button x:Uid="Tuning_Apply"
-                                    Height="34"
+                                    Height="{StaticResource AppComboHeight}"
                                     Style="{StaticResource AppButtonPrimary}"
                                     Command="{x:Bind ViewModel.ApplyCommand}" />
                         </StackPanel>
@@ -159,7 +169,7 @@
                                     <ItemsWrapGrid Orientation="Horizontal"
                                                    MaximumRowsOrColumns="8"
                                                    ItemWidth="92"
-                                                   ItemHeight="34" />
+                                                   ItemHeight="{StaticResource AppInputHeight}" />
                                 </ItemsPanelTemplate>
                             </ListView.ItemsPanel>
                             <ListView.ItemContainerStyle>
@@ -180,13 +190,13 @@
                                 <DataTemplate x:DataType="vm:CoreSlotViewModel">
                                     <!-- 红线二：Grid 叠加「纯 TextBox + 左右两个 Button」。
                                          命令直接绑在按钮上（每格自带命令，入口即身份）。 -->
-                                    <Grid Width="92" Height="34">
+                                    <Grid Width="92" Height="{StaticResource AppInputHeight}">
                                         <TextBox Style="{StaticResource AppTextBoxMono}"
                                                  MaxLength="4"
                                                  Text="{x:Bind EditText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                  TextChanged="OnCoTextChanged" />
                                         <Button Style="{StaticResource AppStepperButton}"
-                                                Width="18" Height="30"
+                                                Width="18" Height="28"
                                                 Margin="2,0,0,0"
                                                 HorizontalAlignment="Left"
                                                 VerticalAlignment="Center"
@@ -195,7 +205,7 @@
                                                 IsTabStop="False"
                                                 Command="{x:Bind DecrementCommand}" />
                                         <Button Style="{StaticResource AppStepperButton}"
-                                                Width="18" Height="30"
+                                                Width="18" Height="28"
                                                 Margin="0,0,2,0"
                                                 HorizontalAlignment="Right"
                                                 VerticalAlignment="Center"
@@ -226,13 +236,13 @@
                             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                                 <!-- 红线二：Grid 叠加，命令直接绑定。
                                      参数 "FMax"，±步进钳制 400~5400，内部须调 MarkDirty()。 -->
-                                <Grid Width="80" Height="34">
+                                <Grid Width="80" Height="{StaticResource AppInputHeight}">
                                     <TextBox Style="{StaticResource AppTextBoxMono}"
                                              MaxLength="4"
                                              Text="{x:Bind ViewModel.FMaxText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                              TextChanged="OnFMaxTextChanged" />
                                     <Button Style="{StaticResource AppStepperButton}"
-                                            Width="18" Height="30"
+                                            Width="18" Height="28"
                                             Margin="2,0,0,0"
                                             HorizontalAlignment="Left"
                                             VerticalAlignment="Center"
@@ -242,7 +252,7 @@
                                             Command="{x:Bind ViewModel.DecrementCommand}"
                                             CommandParameter="FMax" />
                                     <Button Style="{StaticResource AppStepperButton}"
-                                            Width="18" Height="30"
+                                            Width="18" Height="28"
                                             Margin="0,0,2,0"
                                             HorizontalAlignment="Right"
                                             VerticalAlignment="Center"
@@ -320,13 +330,13 @@
                                          参数 "Parking"，步进 5、钳制 0~100。
                                          宽度 76：左右各压一个 18px 的加减号后，
                                          中间仍留得住三位数（100）。 -->
-                                    <Grid Width="76" Height="34">
+                                    <Grid Width="76" Height="{StaticResource AppInputHeight}">
                                         <TextBox Style="{StaticResource AppTextBoxMono}"
                                                  MaxLength="3"
                                                  Text="{x:Bind ViewModel.ParkingText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                  TextChanged="OnParkingTextChanged" />
                                         <Button Style="{StaticResource AppStepperButton}"
-                                                Width="18" Height="30"
+                                                Width="18" Height="28"
                                                 Margin="2,0,0,0"
                                                 HorizontalAlignment="Left"
                                                 VerticalAlignment="Center"
@@ -336,7 +346,7 @@
                                                 Command="{x:Bind ViewModel.DecrementCommand}"
                                                 CommandParameter="Parking" />
                                         <Button Style="{StaticResource AppStepperButton}"
-                                                Width="18" Height="30"
+                                                Width="18" Height="28"
                                                 Margin="0,0,2,0"
                                                 HorizontalAlignment="Right"
                                                 VerticalAlignment="Center"

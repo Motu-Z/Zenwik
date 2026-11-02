@@ -94,7 +94,7 @@ public sealed partial class MainWindow : Window
         //   1. 系统按钮染成全透明（否则自绘按钮下面还压着一套系统图标）；
         //   2. 用 InputNonClientPointerSource 把系统的 min/max/close 命中区域置空，
         //      否则透明按钮仍会吃掉右上角的点击。代价是放弃 Snap Layouts —— 已获批准。
-        TitleBarColors.Transparent(AppWindow.TitleBar);
+        ApplyTransparentCaption();
 
         try
         {
@@ -167,6 +167,28 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 把系统标题栏按钮整体染成透明。
+    ///
+    /// 【为什么构造期染了还要再染一次】
+    /// 标题栏按钮的颜色由 DWM 在窗口显示那一刻绘制。构造期（窗口尚未显示）设置的颜色
+    /// 会被随后的显示流程重绘回默认值 —— 结果就是右上角出现两排按钮：
+    /// 上面一排是系统的 min/max/close，下面一排是我们自绘的悬浮三键。
+    /// 因此这里在窗口加载后、每次激活时都重新染一次，确保持续生效。
+    /// </summary>
+    private void ApplyTransparentCaption()
+    {
+        try
+        {
+            TitleBarColors.Transparent(AppWindow.TitleBar);
+        }
+        catch (Exception ex)
+        {
+            // 标题栏按钮是自绘的，这里染色失败完全不影响可用性 —— 吞掉即可。
+            _logger.Warn($"系统标题栏按钮透明化失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// 把系统标题栏按钮整体染成透明。ThemeController 的配色逻辑仍保留
     /// （万一接管失败需要回退时改回可见即可），这里只在自绘接管成功路径上清场。
     /// </summary>
@@ -208,6 +230,9 @@ public sealed partial class MainWindow : Window
         AppWindow.ResizeClient(new SizeInt32(
             (int)Math.Round(1180 * scale),
             (int)Math.Round(820 * scale)));
+
+        // 窗口已显示，DWM 已经画过一轮系统标题栏按钮 —— 此时再染一次透明才压得住。
+        ApplyTransparentCaption();
     }
 
     // ==================== 导航 ====================
@@ -260,6 +285,9 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void OnActivated(object sender, WindowActivatedEventArgs args)
     {
+        // 系统三键在窗口显示时被 DWM 重绘回默认色，这里每次激活补一次透明化。
+        ApplyTransparentCaption();
+
         // WindowActivationState 只有 Activated / Deactivated / PointerActivated / CodeActivated，
         // 没有「最小化」这一档 —— 最小化在 WinUI 里表现为 Deactivated。
         _process.SetHostVisible(args.WindowActivationState != WindowActivationState.Deactivated);

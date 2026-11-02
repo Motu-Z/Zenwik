@@ -125,7 +125,13 @@
             <SolidColorBrush x:Key="SliderThumbBackground" Color="{ThemeResource AppAccentBrush}" />
             <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="{ThemeResource AppAccentHoverBrush}" />
             <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="{ThemeResource AppAccentPressedBrush}" />
-            <SolidColorBrush x:Key="SliderOuterThumbBackground" Color="Transparent" />
+            <!-- SliderOuterThumbBackground 是 thumb 外圈 Border 的底色：
+                 设成 Transparent 时 2px 轨道线会从圆点正中穿过去（穿模）。
+                 给成与轨道同色的实心强调色，圆点才是一块干净实心。 -->
+            <SolidColorBrush x:Key="SliderOuterThumbBackground" Color="{ThemeResource AppAccentBrush}" />
+
+            <!-- 滚动条：WinUI 框架模板读 ScrollBarPanningThumbBackground 取滑块色 -->
+            <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#33FFFFFF" />
 
             <!-- 开关 -->
             <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="{ThemeResource AppAccentBrush}" />
@@ -229,7 +235,13 @@
             <SolidColorBrush x:Key="SliderThumbBackground" Color="{ThemeResource AppAccentBrush}" />
             <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="{ThemeResource AppAccentHoverBrush}" />
             <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="{ThemeResource AppAccentPressedBrush}" />
-            <SolidColorBrush x:Key="SliderOuterThumbBackground" Color="Transparent" />
+            <!-- SliderOuterThumbBackground 是 thumb 外圈 Border 的底色：
+                 设成 Transparent 时 2px 轨道线会从圆点正中穿过去（穿模）。
+                 给成与轨道同色的实心强调色，圆点才是一块干净实心。 -->
+            <SolidColorBrush x:Key="SliderOuterThumbBackground" Color="{ThemeResource AppAccentBrush}" />
+
+            <!-- 滚动条：WinUI 框架模板读 ScrollBarPanningThumbBackground 取滑块色 -->
+            <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#26000000" />
 
             <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="{ThemeResource AppAccentBrush}" />
             <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="{ThemeResource AppAccentHoverBrush}" />
@@ -336,5 +348,18 @@
     <x:Double x:Key="SliderHorizontalThumbHeight">14</x:Double>
     <x:Double x:Key="SliderPreContentMargin">12</x:Double>
     <x:Double x:Key="SliderPostContentMargin">12</x:Double>
+
+    <!-- ==================== 下拉选中标记 ====================
+         下拉条目的选中标记是一根贴在文字左侧的细竖条，取代整块高饱和底色。 -->
+    <x:Double x:Key="AppSelectionMarkWidth">3</x:Double>
+    <x:Double x:Key="AppSelectionMarkHeight">14</x:Double>
+    <x:Double x:Key="AppSelectionMarkRadius">1.5</x:Double>
+
+    <!-- ==================== 滚动条 ====================
+         WinUI 框架的 ScrollBar 模板按 ScrollBarSize / ScrollBarVerticalThumbMinWidth 取粗细
+         （默认 12 / 8）。应用级同名键覆盖框架默认值，不重写模板就能把滚动条压到极细。
+         滑块颜色走 ThemeDictionaries 里的 ScrollBarPanningThumbBackground。 -->
+    <x:Double x:Key="ScrollBarSize">4</x:Double>
+    <x:Double x:Key="ScrollBarVerticalThumbMinWidth">3</x:Double>
 
 </ResourceDictionary>

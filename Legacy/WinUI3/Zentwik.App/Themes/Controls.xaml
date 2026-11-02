@@ -645,15 +645,15 @@
         <Setter Property="UseSystemFocusVisuals" Value="False" />
     </Style>
 
-    <!-- 数值输入：34px 高、Consolas、居中 —— CO 网格 / FMax / 核心停放专用。
-         【Padding 为什么是 20,8,20,0 而不是 4,0】
+    <!-- 数值输入：AppInputHeight 高、Consolas、居中 —— CO 网格 / FMax / 核心停放专用。
+         【Padding 为什么是 20,7,20,0 而不是 4,0】
          WinUI 3 的 TextBox 模板里，内容区是一个 ScrollViewer（x:Name="ContentElement"），
          而 DefaultScrollViewerStyle 把 VerticalContentAlignment 写死成 Top ——
          结果就是 TextBox.VerticalContentAlignment 根本不生效，文字永远顶在框的上沿。
          红线②禁掉了重写 TextBox 模板，只能在样式层用内边距补偿：
-             框高 34 / 上下边框各 1 / 单行行高约 16
-             上内边距 8 → 文字中心 = 1 + 8 + 8 = 17 = 框中心 → 视觉绝对居中
-             下内边距 0 → 内容区高 24 > 行高 16，永远不会触发内部滚动条
+             框高 32（AppInputHeight）/ 上下边框各 1 / 单行行高约 16
+             上内边距 7 → 文字中心 = 1 + 7 + 8 = 16 = 框中心 → 视觉绝对居中
+             下内边距 0 → 内容区高 23 > 行高 16，永远不会触发内部滚动条
          左右各 20 是给压在两端的加减号留位：数字只落在中间那截，不会被按钮压住。 -->
     <Style x:Key="AppTextBoxMono" TargetType="TextBox" BasedOn="{StaticResource AppTextBox}">
         <Setter Property="Height" Value="{StaticResource AppInputHeight}" />
@@ -661,7 +661,7 @@
         <Setter Property="FontFamily" Value="{StaticResource AppMonoFontFamily}" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="TextAlignment" Value="Center" />
-        <Setter Property="Padding" Value="20,8,20,0" />
+        <Setter Property="Padding" Value="20,7,20,0" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="Background" Value="{ThemeResource ControlFillColorDefaultBrush}" />
         <Setter Property="BorderBrush" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
@@ -815,13 +815,16 @@
                             </VisualStateGroup>
                         </VisualStateManager.VisualStateGroups>
 
-                        <!-- 选中标记：左侧一根 3px 细竖条，比整块亮色底克制得多 -->
+                        <!-- 选中标记：左侧一根细竖条，比整块亮色底克制得多。
+                             Rectangle 没有 CornerRadius 属性，端头圆角用 RadiusX / RadiusY；
+                             尺寸与圆角全部走 token。 -->
                         <Rectangle x:Name="SelectionMark"
                                    Grid.Column="0"
-                                   Width="3"
-                                   Height="14"
+                                   Width="{StaticResource AppSelectionMarkWidth}"
+                                   Height="{StaticResource AppSelectionMarkHeight}"
                                    Margin="0,0,4,0"
-                                   RadiusX="1.5" RadiusY="1.5"
+                                   RadiusX="{StaticResource AppSelectionMarkRadius}"
+                                   RadiusY="{StaticResource AppSelectionMarkRadius}"
                                    VerticalAlignment="Center"
                                    Fill="{ThemeResource AppAccentBrush}"
                                    Visibility="Collapsed" />
@@ -903,6 +906,7 @@
                                     <VisualState.Setters>
                                         <Setter Target="HighlightBackground.Background" Value="{ThemeResource AppControlBackgroundDisabledBrush}" />
                                         <Setter Target="ContentPresenter.Opacity" Value="0.4" />
+                                        <Setter Target="SelectionText.Opacity" Value="0.4" />
                                         <Setter Target="DropDownGlyph.Opacity" Value="0.4" />
                                     </VisualState.Setters>
                                 </VisualState>
@@ -922,6 +926,12 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
+                            <!-- 关闭态文字：改由 SelectionText 显示。
+                                 ComboBox 基类会在运行时往 ContentPresenter.Content 上写值，
+                                 模板里的 TemplateBinding 会被它顶成 null —— 合上就是一片空白。
+                                 ContentPresenter 是基类按名取的命名部件，不能删（删了就是运行期空引用），
+                                 所以折叠起来只作占位，真正显示的是 SelectionText
+                                 （AppComboBox.DisplayText，一条与基类互不干扰的纯文本通道）。 -->
                             <ContentPresenter x:Name="ContentPresenter"
                                               Grid.Column="0"
                                               Content="{TemplateBinding SelectionBoxItem}"
@@ -929,7 +939,18 @@
                                               HorizontalAlignment="Left"
                                               VerticalAlignment="Center"
                                               Foreground="{TemplateBinding Foreground}"
+                                              Visibility="Collapsed"
                                               AutomationProperties.AccessibilityView="Raw" />
+
+                            <TextBlock x:Name="SelectionText"
+                                       Grid.Column="0"
+                                       Text="{TemplateBinding DisplayText}"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       FontFamily="{TemplateBinding FontFamily}"
+                                       FontSize="{TemplateBinding FontSize}"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       IsHitTestVisible="False" />
 
                             <TextBlock x:Name="PlaceholderTextBlock"
                                        Grid.Column="0"
@@ -969,7 +990,10 @@
                                     Margin="0,4,0,0"
                                     Padding="0,4"
                                     MaxHeight="300">
-                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                <!-- 弹层内容通常只有个位数条目，却挂着一根带上下箭头的原生滚动条
+                                     （宽 12px + 箭头），比弹层本身还抢眼。
+                                     滚动模式保留 Auto（条目多时仍能滚），滚动条可见性藏掉。 -->
+                                <ScrollViewer VerticalScrollBarVisibility="Hidden"
                                               VerticalScrollMode="Auto"
                                               HorizontalScrollMode="Disabled"
                                               HorizontalScrollBarVisibility="Disabled">

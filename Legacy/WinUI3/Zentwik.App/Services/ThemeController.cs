@@ -478,6 +478,8 @@ public sealed class ThemeController
             resources["SliderThumbBackground"] = new SolidColorBrush(color);
             resources["SliderThumbBackgroundPointerOver"] = new SolidColorBrush(Lighten(color, 0.35));
             resources["SliderThumbBackgroundPressed"] = new SolidColorBrush(Darken(color, 0.22));
+            // thumb 外圈底色必须与轨道同色：留成透明会让轨道线从圆点里穿过去。
+            resources["SliderOuterThumbBackground"] = new SolidColorBrush(color);
             resources["ToggleSwitchFillOn"] = new SolidColorBrush(color);
             resources["ToggleSwitchFillOnPointerOver"] = new SolidColorBrush(Lighten(color, 0.35));
             resources["ToggleSwitchFillOnPressed"] = new SolidColorBrush(Darken(color, 0.22));
