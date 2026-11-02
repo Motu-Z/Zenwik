@@ -1,0 +1,13 @@
+<Application x:Class="Zentwik.UI.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <!--
+      ShutdownMode 必须是 OnExplicitShutdown（事实卡 §7.4 第 2 条）。
+      默认的 OnMainWindowClose 会在主窗口销毁时直接结束整个应用 ——
+      「收托盘」就退化成「退出」，托盘图标一闪即消失，而代码里看不出任何异常。
+
+      这里刻意不挂任何资源字典：本轮是壳子，没有主题系统。
+    -->
+    <Application.Resources />
+</Application>

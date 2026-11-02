@@ -1,0 +1,47 @@
+<Window x:Class="Zentwik.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Zentwik"
+        Height="320"
+        Width="520"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI Variable Text, Microsoft YaHei UI"
+        FontSize="13">
+    <!--
+      本轮是壳子：一个状态文本 + 一个占位按钮。
+      调校页 / 进程页 / 日志页 / 配置页留到后续批次，这里不做导航壳，
+      避免先建一套马上要重写的布局。
+    -->
+    <Grid Margin="28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="Zentwik"
+                   FontSize="24"
+                   FontWeight="SemiBold" />
+
+        <TextBlock x:Name="StatusTextBlock"
+                   Grid.Row="1"
+                   Text="正在启动…"
+                   Margin="0,16,0,0"
+                   VerticalAlignment="Top"
+                   TextWrapping="Wrap" />
+
+        <StackPanel Grid.Row="2" Orientation="Vertical">
+            <!-- 事件不在 XAML 里挂：构造函数里先设 IsChecked 再订阅，
+                 否则初始化赋值本身就会触发 Checked/Unchecked，一启动就发一次 IPC。 -->
+            <CheckBox x:Name="AutoStartCheckBox"
+                      Content="开机自启"
+                      Margin="0,0,0,12" />
+
+            <Button Content="打开调校页"
+                    Padding="14,6"
+                    HorizontalAlignment="Left"
+                    Click="OnOpenTuningPageClick" />
+        </StackPanel>
+    </Grid>
+</Window>
