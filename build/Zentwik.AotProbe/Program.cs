@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Zentwik.Core.DependencyInjection;
 using Zentwik.Core.Helpers;
+using Zentwik.Core.Ipc;
 using Zentwik.Core.Serialization;
 using Zentwik.Core.Services;
 
@@ -13,8 +14,8 @@ namespace Zentwik.AotProbe;
 /// <summary>
 /// Core 的 AOT 冒烟测试。
 ///
-/// 只做只读探测：读电源索引、读 CPU Set 拓扑、扫进程快照、发一次 SMU 测试消息。
-/// 不写任何系统设置，不改任何用户配置。
+/// 只做只读探测：读 CPU Set 拓扑、扫进程快照、走一遍 IPC 契约的序列化与版本协商、
+/// 发一次 SMU 测试消息。不写任何系统设置，不改任何用户配置。
 /// </summary>
 internal static class Program
 {
@@ -27,10 +28,6 @@ internal static class Program
 
         Console.WriteLine($"[{(ok ? "PASS" : "FAIL")}] {name}: {detail}");
     }
-
-    /// <summary>本机硬件 / 电源方案不支持的能力，不计入失败。</summary>
-    private static void Skip(string name, string detail)
-        => Console.WriteLine($"[SKIP] {name}: {detail}");
 
     private static int Main()
     {
@@ -45,7 +42,8 @@ internal static class Program
 
         ProbeJson(root);
         ProbeLog(root);
-        ProbePowerIndex();
+        ProbeIpc();
+        ProbeProcessPriority();
         ProbeProcessSnapshot();
         ProbeContainer(root);
 
@@ -145,32 +143,66 @@ internal static class Program
                 ? $"files={files.Length}, lines={File.ReadAllLines(files[0]).Length}"
                 : $"未生成日志文件（目录存在={Directory.Exists(options.Directory)}, LogDirectory={log.LogDirectory}）");
 
-        Check("log.snapshot", log.Snapshot().Length == log.Count, $"snapshot={log.Snapshot().Length}");
+        Check("log.snapshot", log.Snapshot().Count == log.Count, $"snapshot={log.Snapshot().Count}");
     }
 
-    // ---------------------------------------------------------------- 电源索引
+    // ---------------------------------------------------------------- IPC 契约
 
-    private static void ProbePowerIndex()
+    /// <summary>
+    /// 三条只依赖 <see cref="WorkerPipeContract"/> 与源生成序列化的检查。
+    ///
+    /// 不建管道、不起进程：真正的往返要等批次三 Worker 落地后才有对端。
+    /// 这里覆盖的是「契约本身在 AOT 下能否完成序列化往返」与「版本判定是否可判定」，
+    /// 也就是 source-generated <see cref="IpcJsonContext"/> 有没有被裁剪掉。
+    /// </summary>
+    private static void ProbeIpc()
     {
-        bool available = ProcessorPowerPolicy.IsAvailable();
-        Check("power.activeScheme", available, available ? "可读取当前方案" : "读取失败（可能被策略锁定）");
-
-        if (available)
+        PipeRequest request = new()
         {
-            bool detected = ProcessorPowerPolicy.TryDetect(out PowerPlanProfile? profile, out string error);
-            Check("power.detect", detected,
-                detected ? $"档位={profile?.ToString() ?? "自定义"}" : error);
-        }
+            Version = WorkerPipeContract.ProtocolVersion,
+            Command = WorkerPipeContract.CommandPing,
+            Payload = null
+        };
 
-        bool boostOk = ProcessorPowerTuning.TryReadBoost(out uint boost, out string boostError);
-        Check("power.boost", boostOk, boostOk ? $"PERFBOOSTMODE={boost}" : boostError);
+        string json = JsonSerializer.Serialize(request, IpcJsonContext.Default.PipeRequest);
+        PipeRequest? restored = JsonSerializer.Deserialize(json, IpcJsonContext.Default.PipeRequest);
 
-        bool parkingOk = ProcessorPowerTuning.TryReadCoreParking(out uint parking, out string parkingError);
-        if (parkingOk)
-            Check("power.coreParking", true, $"CPMINCORES={parking}%");
-        else
-            Skip("power.coreParking", parkingError);
+        Check("ipc.roundtrip",
+            restored is not null
+                && restored.Version == request.Version
+                && string.Equals(restored.Command, request.Command, StringComparison.Ordinal),
+            $"version={restored?.Version}, command={restored?.Command ?? "(null)"}, bytes={json.Length}");
 
+        bool matched = WorkerPipeContract.ValidateVersion(
+            WorkerPipeContract.ProtocolVersion, out string matchedError);
+        Check("ipc.versionMatch", matched && matchedError.Length == 0,
+            matched
+                ? $"version={WorkerPipeContract.ProtocolVersion}, error=空"
+                : $"error={matchedError}");
+
+        bool rejectedZero = WorkerPipeContract.ValidateVersion(0, out string zeroError);
+        bool rejectedFuture = WorkerPipeContract.ValidateVersion(2, out string futureError);
+        bool rejectedNegative = WorkerPipeContract.ValidateVersion(-1, out string negativeError);
+        bool allRejected = !rejectedZero && !rejectedFuture && !rejectedNegative;
+
+        // 三条失败路径必须给同一句话：文案分叉会让「UI 提示重装、Worker 只说 invalid」重现。
+        bool sameMessage =
+            string.Equals(zeroError, WorkerPipeContract.VersionMismatchMessage, StringComparison.Ordinal)
+            && string.Equals(futureError, WorkerPipeContract.VersionMismatchMessage, StringComparison.Ordinal)
+            && string.Equals(negativeError, WorkerPipeContract.VersionMismatchMessage, StringComparison.Ordinal);
+
+        Check("ipc.versionMismatch", allRejected && sameMessage,
+            $"0/2/-1 全部拒绝={allRejected}, 文案一致={sameMessage}");
+    }
+
+    // ---------------------------------------------------------------- 进程优先级
+
+    /// <summary>
+    /// 只保留 <see cref="ProcessPriority"/> 的文案映射。
+    /// 原电源索引相关检查已随批次 A-2 的电源子系统删除一并移除。
+    /// </summary>
+    private static void ProbeProcessPriority()
+    {
         Check("power.priorityLabel", ProcessPriority.FromBasePriority(8).Length > 0,
             ProcessPriority.FromBasePriority(8));
     }
@@ -217,7 +249,6 @@ internal static class Program
     {
         ServiceCollection services = new();
         services.AddZentwikCore(
-            dispatcher: null,
             configureLog: options => options.Directory = Path.Combine(root, "ContainerLogs"));
 
         using ServiceProvider provider = services.BuildServiceProvider(

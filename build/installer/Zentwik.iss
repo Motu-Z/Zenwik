@@ -5,20 +5,21 @@
 ; 产物：dist\Zentwik-2.0.0-can3-setup-win-x64.exe
 ;
 ; 【为什么不用 MSIX】
-; 应用清单要求 requireAdministrator，而 MSIX 的声明式提权受限且必须签名、
+; 应用清单要求提权，而 MSIX 的声明式提权受限且必须签名、
 ; 必须走证书信任链。目标用户是「装完就用」的个人用户，MSIX 的门槛
 ; （开发者证书 / 商店）与他们使用此工具的动机不匹配。
 ;
-; 【为什么 Setup 也要 admin】
-; 主程序 requireAdministrator。若安装过程不提权，快捷方式会被写到用户级
-; 目录，而应用从 HKLM 或 Program Files 读取资源时又需要提权 —— 徒增 UAC 次数。
-; 一次性提权装到 {autopf}，之后每次启动只弹一次 UAC（应用自身）。
+; 【权限模型（批次五收尾补入）】
+; 主程序 asInvoker，Worker requireAdministrator，安装包 PrivilegesRequired=admin。
+; UI 侧零提权：写 SMU / 注册任务计划 / 改注册表一律走 IPC 交给 Worker。
+; 安装仍要 admin —— 装到 {autopf} 需要写 Program Files，否则会退化成用户目录，
+; 让「同一台机器上两个用户各装一份」成为可能，而 Worker 的单实例互斥体是 Global\ 的。
 ; ============================================================
 
 #define AppName "Zentwik"
 #define AppVersion "2.0.0-can3"
 #define AppPublisher "Zentwik"
-#define AppExe "Zentwik.App.exe"
+#define AppExe "Zentwik.UI.exe"
 
 [Setup]
 AppId={{8E3F1C42-7B6D-4A15-9C2E-5D0F8B7A1E63}
@@ -32,7 +33,7 @@ UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName} {#AppVersion}
 OutputDir=..\..\dist
 OutputBaseFilename={#AppName}-{#AppVersion}-setup-win-x64
-SetupIconFile=..\..\Assets\Zentwik.ico
+SetupIconFile=..\..\Zentwik.UI\Assets\Zentwik.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern

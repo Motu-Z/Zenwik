@@ -30,9 +30,25 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
-    - name: Publish WPF Application
+    # 双进程发布：UI 与 Worker 由同一次发布产出、装进同一目录。
+    # 两条 publish 必须指向同一个 -o —— 只发一个 exe 的包，UI 启动时会拉不起 Worker，
+    # 表现为「永远显示未连接」，且没有任何报错。
+    #
+    # 两端参数一致，逐项理由：
+    #   · --self-contained false：产品口径是「用户自装 .NET 10 Runtime」，不随包带运行时；
+    #   · PublishSingleFile=true：每端只出一个 exe，安装目录干净；
+    #   · WinIo32.dll 不会被打进单文件 —— Core 的 csproj 对它标了 ExcludeFromSingleFile=true，
+    #     它必须与 exe 同目录落地（ZenStates-Core 按文件名自己 LoadLibrary，不认单文件
+    #     解包目录）。两个工程各引用一次 Core，会各写一份内容相同的副本到同一目录，
+    #     后写的覆盖先写的，无副作用。因此不需要给 Worker 单独加 ExcludeFromSingleFile。
+    #   · PublishReadyToRun：UI 冷启动收益明确，Worker 是登录后常驻进程、同样受益，保持一致。
+    - name: Publish UI
       run: |
-        dotnet publish Zentwik.csproj -c Release -r win-x64 --self-contained false -p:PublishReadyToRun=true -p:PublishSingleFile=true -o ./publish
+        dotnet publish Zentwik.UI/Zentwik.UI.csproj -c Release -r win-x64 --self-contained false -p:PublishReadyToRun=true -p:PublishSingleFile=true -o ./publish
+
+    - name: Publish Worker
+      run: |
+        dotnet publish Zentwik.Worker/Zentwik.Worker.csproj -c Release -r win-x64 --self-contained false -p:PublishReadyToRun=true -p:PublishSingleFile=true -o ./publish
 
     - name: Create Zip Archive
       run: |
