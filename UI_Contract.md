@@ -1,6 +1,11 @@
 # Zentwik 调校页 (TuningPage) 接口契约
 
-> **当前契约版本：`v1.5`**（2026-11-01，人类批准）。历史版本见下方「契约版本记录」。
+> **状态说明（批次 A-2 后）**：本文件描述的 UI 契约已部分失效。
+> `ProcessorPowerPolicy` 和 `ProcessorPowerTuning` 已在批次 A-2 中移除，
+> 相关的电源策略、升频模式、核心停放契约条款不再有效。完整的 UI 契约将在
+> 批次四（Zentwik.UI 重写）完成时整份重新定义。本文件当前仅作历史参考。
+
+> **当前契约版本：`v1.6`**（2026-11-01，人类批准）。历史版本见下方「契约版本记录」。
 >
 > **⚠️ 强制规范**：本文档是前端 (XAML) 与后端 (ViewModel) 通信的唯一法定契约。
 > 任何 AI 或开发者不得擅自修改、重命名本文档中定义的属性或命令；如需修改，请提前与人类商讨并告知另一个 AI。
@@ -8,6 +13,7 @@
 > **契约基线**：`v2.0.0-can15`（commit `3f928f7`，分支 `main`）。
 >
 > **契约版本记录**：
+> - **v1.6（2026-11-01，人类批准）**：新增 **2 个只读展示属性** `CpuTitle` / `CpuDetail`（详见第 1 节）—— 把后端一整串 `CpuName` 拆成「型号」与「规格 · SMU 状态」两段，供 CPU 卡片主副标题分行显示。其余属性 / 命令 / 集合定义与 v1.5 完全一致。
 > - **v1.5（2026-11-01，人类批准）**：**UI 红线入典**。① 核心网格强制结构由 `ItemsRepeater` + `UniformGridLayout` 改为 **`ListView` + `ItemsWrapGrid`**（属性名 `ListView.ItemsPanel`，类型仍是 `ItemsPanelTemplate`；详见第 3 节 API 事实）。② 数值输入**禁用 `<ControlTemplate>` 重写 `TextBox`**，隐式加减号一律用 `Grid` 叠加「纯 `TextBox` + 左右两个 `Button`」，命令**直接** `Command=` 绑定，**废除** `TextBox.Tag` / `Header` 模板穿透。③ 加减号**常驻显示**（不再悬浮 / 聚焦淡入）。④ 全页**禁用 `TabView`**。**属性 / 命令定义、参数、步长、钳制范围、绑定语义一律未变** —— 后端 `.cs` **无需任何改动**，本次纯前端契约条目修订。
 > - **v1.4（2026-11-01，人类批准）**：补全**步进命令**（4 个成员 / 6 处绑定）：`CoreSlotViewModel.IncrementCommand` / `DecrementCommand`（CO ±1）与 `TuningViewModel.IncrementCommand` / `DecrementCommand`（`IRelayCommand<string>`，参数 `"FMax"` / `"Parking"`）。步进**必须置脏**（不经过 `TextChanged`，脏状态不会自动产生）。前端 XAML 无需改动，详见 4.3。
 > - **v1.3（2026-11-01，人类批准）**：`RefreshCommand` 升级为**全量同步** —— 一次读回 SMU 核心状态 **+** 电源策略（计划 / 升频 / 停放），并按「读到的真值覆盖草稿」处置界面状态（详见 4.2）。命令名称 / 来源方法 / 绑定方式全部未变，**前端 XAML 无需改动**；是否在同步前弹确认框由前端自行决定（判据与配方见 4.2）。
@@ -20,7 +26,6 @@
 > - `Zentwik.App/ViewModels/UiSeverity.cs` / `Zentwik.App/UiConverters.cs`
 > - `Zentwik.App/Views/TuningPage.xaml` / `TuningPage.xaml.cs`
 > - `Zentwik.Core/Services/ISmuReader.cs` / `SmuReader.cs`（SmuSnapshot 等数据结构）
-> - `Zentwik.Core/Services/ProcessorPowerPolicy.cs` / `ProcessorPowerTuning.cs`
 > - `Zentwik.Core/Helpers/TuningStore.cs` / `Zentwik.Core/Services/ProfileService.cs`
 
 ---
@@ -41,8 +46,10 @@
 
 | 属性名 | 类型 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `CpuName` | `string` | `"未探测"` | 如 "AMD Ryzen 9 9955HX"，由 SMU 快照回填。 |
-| `CpuSubText` | `string` | `"等待同步 SMU"` | 如 "Raphael · SMU SMU 90.6.0"；SMU 未响应时为 "SMU 未响应"。 |
+| `CpuName` | `string` | `"未探测"` | 如 "AMD Ryzen 9 9955HX"，由 SMU 快照回填。**实际回填值可能把规格缀在型号后面**（"AMD Ryzen 9 9955HX 16-Core Processor"），直接显示会被截断 —— 展示请用下面两个派生属性。 |
+| `CpuTitle` | `string` | `"未探测"` | **v1.6 新增（只读派生）**。CPU 主标题：纯型号，如 "AMD Ryzen 9 9955HX"。由 `CpuName` 剥掉 "16-Core Processor" 这类规格后缀得到；`CpuName` 变化时自动刷新。 |
+| `CpuDetail` | `string` | `"未连接"` | **v1.6 新增（只读派生）**。CPU 副标题：规格 + SMU 状态，如 "16-Core Processor · SMU 就绪"。SMU 异常时后半段是错误全文；无规格时只显示 SMU 状态。随 `CpuName` / `SmuStateText` 自动刷新。 |
+| `CpuSubText` | `string` | `"等待同步 SMU"` | 如 "Raphael · SMU SMU 90.6.0"；SMU 未响应时为 "SMU 未响应"。**v1.6 起不再直接上屏**（信息让位给 `CpuDetail`），降级为副标题的悬浮提示。 |
 | `TopologyText` | `string` | `"—"` | 如 "2 CCD × 8 核 · 16 物理 / 32 线程"。 |
 | `CoreSummary` | `string` | `"0 核"` | 汇总行：`"{N} 核 · 与硬件一致"` 或 `"{N} 核 · {dirty} 核待下发"`。 |
 | `SmuStateText` | `string` | `"未连接"` | SMU 状态行文案："SMU 就绪" / 错误全文。 |
@@ -85,22 +92,7 @@
 
 ### 2.3 电源策略
 
-| 属性名 | 类型 | 默认值 | 绑定模式 | 说明 |
-| :--- | :--- | :--- | :--- | :--- |
-| `PowerAvailable` | `bool` | `true` | OneWay | 电源策略**整体**可用性。升频模式与核心停放**两者都读不到**时才为 `false`（此时下拉 / 滑杆应禁用）。 |
-| `PowerPlanIndex` | `int` | `-1` | TwoWay | 电源计划档位索引，对应 `PowerPlanOptions` 下标。**-1 = 系统未暴露，下拉框必须停在未选中态，禁止假装选中"均衡"**。 |
-| `PowerPlanHint` | `string` | `"未读取"` | OneWay | 当前检测到的档位文案 / 反推失败时的错误文本。 |
-| `BoostIndex` | `int` | `-1` | TwoWay | 升频模式索引，对应 `BoostOptions` 下标（顺序固定：积极且高效 / 积极 / 已启用 / 高效 / 已停用）。读回 `无设置` 哨兵时也为 -1，提示走 `BoostHint`。 |
-| `BoostHint` | `string` | `"未读取"` | OneWay | 选中项说明 / `"系统默认（未显式设置升频模式）"` / 错误文本。 |
-| `ParkingValue` | `double` | `100` | TwoWay | 核心停放百分比，**Slider 专用**（拖动过程必然为小数）。 |
-| `ParkingInt` | `int` | `100` | OneWay | 停放百分比整型，步进器语义；与 `ParkingValue` 幂等同步（取整后一致即不回写，防互相触发）。 |
-| `ParkingText` | `string` | `"100"` | TwoWay | 纯 TextBox 入口。容错解析同 `FMaxText`；合法值钳制 `≤ 100` 后写入 `ParkingValue`。 |
-| `ParkingHint` | `string` | `"未读取"` | OneWay | 随数值变化的说明文案；读取失败时为错误文本（如 "当前电源方案不提供核心停放设置。"）。 |
-| `IsCoreParkingSupported` | `bool` | `false` | OneWay | **v1.1 新增，v1.2 起已实现**。核心停放是否受支持的硬闸门。赋值时机：初始 `false`；电源策略读取成功后按 `ProcessorPowerTuning.TryReadCoreParking` 的 `parkOk` 赋值；`PowerAvailable == false`（升频/停放整体不可用）时**必须**为 `false`；读取失败保持上次结果不变。前端 Visibility / IsEnabled 一律绑此属性。 |
-
-> **前端禁止解析 `ParkingHint` 文案判断停放支持性**（v1.0 时代的脆弱替代方案已废止）：硬闸门统一绑 `IsCoreParkingSupported`。
-> **v1.2 起**：核心停放那一行（Slider + TextBox）的 `IsEnabled` 改绑 `IsCoreParkingSupported`；升频模式那一行仍绑 `PowerAvailable`。
-> 真实行为备注（供前端预判）：`IsCoreParkingSupported == true` 时 `ParkingValue` / `ParkingText` 必然已回填有效值；`PowerAvailable == false` 时升频模式与停放**两组**一并禁用，与两个闸门属性同时为 `false` 等价。
+> **本节描述的电源策略能力已在批次 A-2 移除**，待批次四 UI 重写时重新定义。原表格中的 `PowerAvailable` / `PowerPlanIndex` / `BoostIndex` / `ParkingValue` / `IsCoreParkingSupported` 等属性，支撑它们的 Core 类型已不存在，不再构成有效契约。
 
 ### 2.4 核心网格空态
 
@@ -120,10 +112,10 @@
 | 模板示例中的属性 | 真实代码 | 结论 |
 | :--- | :--- | :--- |
 | `IsSyncFailed` | ❌ 不存在 | 读取失败用 `SmuAvailable=false` + `StatusLevel=Error/Warning` + `IsStatusVisible` 表达 |
-| `IsCoreParkingSupported` | ✅ v1.1 立为正契属性，v1.2 起已实现 | 赋值时机见 2.3；前端禁解析 `ParkingHint` 文案 |
+| `IsCoreParkingSupported` | ✅ v1.1 立为正契属性，v1.2 起已实现 | 【A-2 后已移除】赋值时机见 2.3 状态说明；前端禁解析 `ParkingHint` 文案 |
 | `IsFMaxSupported` | ✅ v1.1 立为正契属性，v1.2 起已实现 | 赋值时机见 2.2；前端禁解析 `FMaxHint` 文案 |
 | `MaxCores` | ❌ 不存在 | 核心总数 = `Cores.Count`，见第 1 节警告 |
-| `CoreParkingText` | 实为 `ParkingText` / `ParkingInt` / `ParkingValue` 三件套 | 见 2.3 |
+| `CoreParkingText` | 实为 `ParkingText` / `ParkingInt` / `ParkingValue` 三件套 | 【A-2 后已移除】见 2.3 状态说明 |
 
 ---
 
@@ -132,7 +124,6 @@
 | 属性名 | 类型 | 说明 |
 | :--- | :--- | :--- |
 | `Cores` | `ObservableCollection<CoreSlotViewModel>` | **动态生成**：SMU 快照 `CoreMargins` 有多少个物理核心就生成多少个 Slot。数量不变时**只回填硬件值、不清空重建**（防滚动位置跳动）；数量变化才 Clear + 重建。前端必须 **`ListView` + `ItemsWrapGrid`**（列数 8，`Orientation="Horizontal"`，`MaximumRowsOrColumns="8"`，`ItemWidth` / `ItemHeight` **必须显式给值**，否则列宽随内容浮动），自动流式布局。 |
-| `BoostOptions` | `ObservableCollection<string>` | 升频模式文案，固定 5 项，顺序由后端 `ProcessorPowerTuning.BoostOptions` 决定（AOT 下不用 `Enum.GetValues`）。 |
 | `PowerPlanOptions` | `ObservableCollection<string>` | 电源计划文案，固定 4 项（解除限制 / 温和 / 均衡 / 静音），索引即 `PowerPlanIndex`。 |
 | `ProfileOptions` | `ObservableCollection<string>` | 方案名列表，与 `ProfileService.Items` 一一对应，**索引即身份**（下拉框只需 int SelectedIndex，不塞对象）。空列表时后端会塞一项占位 `"自定义方案"` 并把索引指 0，避免下拉框空壳。 |
 
@@ -182,34 +173,19 @@
 | :--- | :--- | :--- | :--- |
 | `RefreshCommand` | `RefreshAsync()` | CPU 卡片同步图标按钮，`Command=` 直接绑定 | **全量同步**（v1.3）：一次读回 SMU 快照（拓扑 / FMax / 逐核值）**与**电源策略（计划 / 升频 / 停放），两者**分别**报告成败。回填**抑制**脏状态。SMU 不可用时不硬读，直接告警提示条；电源策略不依赖 SMU 驱动，SMU 挂了照样读。草稿处置见 4.2。 |
 | `ApplyCommand` | `ApplyAsync()` | CPU 卡片「应用」按钮，`Command=` 直接绑定 | 全程遮罩：①逐核 CO 越界校验（-50~+50，失败即停并报核号）→ ②读快照（回滚基线）→ ③逐核下发（未改动的核用 `int.MinValue` 哨兵跳过）→ ④回读校验（Core 完成）→ ⑤**任何失败整体回滚到下发前**并静默刷新回填 → ⑥成功后落盘 `tuning.json`、清脏状态。FMax 仅在用户改动过时才写。 |
-| `ApplyPowerCommand` | `ApplyPowerAsync()` | 下拉换项时由 View 层**立即**调用；滑杆路径由 ViewModel 内部防抖自动执行（见 4.1）。命令本身未变 | `PowerAvailable=false` 时拒绝。顺序硬约束：**先电源计划（整套索引，会覆盖后两者）→ 再升频模式 → 再核心停放**。三项各自独立报告成败，部分失败也如实汇总。完成后回读刷新。 |
+| `ApplyPowerCommand` | `ApplyPowerAsync()` | 下拉换项时由 View 层**立即**调用；滑杆路径由 ViewModel 内部防抖自动执行（见 4.1）。命令本身未变 | 【A-2 后已移除】`PowerAvailable=false` 时拒绝。顺序硬约束：**先电源计划（整套索引，会覆盖后两者）→ 再升频模式 → 再核心停放**。三项各自独立报告成败，部分失败也如实汇总。完成后回读刷新。 |
 | `LoadCommand` | `Load()` | ⚠️ **当前 XAML 未绑定**（保留入口） | 把 `tuning.json` 已保存设定填进界面草稿，**不写硬件**。无记录时提示。 |
 | `SaveCommand` | `Save()` | 浮动保存条「保存覆盖」按钮（View 层 `Click → Execute(null)`） | **只落盘不下发**。保存的是"期望状态"（逐核 `RoundedValue` + FMax + 出厂基线），供开机静默自启重新应用。无核心列表时拒绝。 |
 | `DiscardDraftCommand` | `DiscardDraft()` | 浮动保存条「放弃」按钮（`Click → Execute(null)`） | 界面回到**当前选中方案**（`ProfileIndex` 对应快照）的 CO / FMax 值，**不碰硬件**；清脏状态。 |
 | `SaveDraftAsCommand` | `SaveDraftAs()` | 浮动保存条「另存为」按钮（`Click → Execute(null)`） | 当前草稿（CO + FMax）存成新方案（名 "自定义方案 HHmmss"）并选中新方案，落盘，清脏状态。 |
-| `IncrementCommand` | `Increment(string target)` | 步进「加号」。前端**直接** `Command=` 绑定在「+」按钮上，按钮带 `CommandParameter="FMax"` / `"Parking"` | 参数 `"FMax"` → FMax **+10 MHz**（钳制 400~5400）；参数 `"Parking"` → 核心停放 **+5%**（钳制 0~100）。**内部必须调 `MarkDirty()`**。 |
-| `DecrementCommand` | `Decrement(string target)` | 步进「减号」。前端**直接** `Command=` 绑定在「−」按钮上，按钮带 `CommandParameter="FMax"` / `"Parking"` | 同上，方向相反。**内部必须调 `MarkDirty()`**。 |
+| `IncrementCommand` | `Increment(string target)` | 步进「加号」。前端**直接** `Command=` 绑定在「+」按钮上，按钮带 `CommandParameter="FMax"` / `"Parking"` | 【A-2 后已移除】仅 `"Parking"` 分支（核心停放 **+5%**，钳制 0~100）；`"FMax"` 分支（**+10 MHz**，钳制 400~5400）**仍有效**。**内部必须调 `MarkDirty()`**。 |
+| `DecrementCommand` | `Decrement(string target)` | 步进「减号」。前端**直接** `Command=` 绑定在「−」按钮上，按钮带 `CommandParameter="FMax"` / `"Parking"` | 【A-2 后已移除】仅 `"Parking"` 分支（核心停放 **−5%**，钳制 0~100）；`"FMax"` 分支（**−10 MHz**，钳制 400~5400）**仍有效**。其余同 `IncrementCommand`，方向相反。**内部必须调 `MarkDirty()`**。 |
 
 > 模板示例名 → 真实名对照：`SyncHardwareCommand`→**`RefreshCommand`**；`ApplySettingsCommand`→**`ApplyCommand`**；`DiscardChangesCommand`→**`DiscardDraftCommand`**；`SaveProfileCommand`→**`SaveCommand`**；`SaveAsProfileCommand`→**`SaveDraftAsCommand`**。
 
 ### 4.1 电源策略的提交时机（v1.2 修订）
 
-防抖逻辑已从 View 层收敛到 ViewModel —— 计时与提交必须同层，否则 View 与 ViewModel 各持一套计时器时会互相触发对方的提交路径。分工：
-
-| 触发源 | 提交时机 | 路径 |
-| :--- | :--- | :--- |
-| 电源计划 / 升频模式下拉换项 | **立即** | View 层 `OnPowerSelectionChanged` → `ApplyPowerCommand` |
-| 核心停放滑杆拖动 | 停手 **700ms** 后 | View 层 `OnParkingValueChanged` → `ViewModel.SchedulePowerApply()` → ViewModel 内部防抖 → `ApplyPowerAsync()` |
-
-**`ApplyPowerCommand` 的名称、来源方法、行为、可执行条件全部未变**，仍可被 XAML 直接 `Command=` 绑定。
-
-新增（**非绑定**）View 层可调用成员：
-
-| 成员 | 类型 | 说明 |
-| :--- | :--- | :--- |
-| `SchedulePowerApply()` | `void` | 通知 ViewModel「用户改动了停放滑杆」。ViewModel 内部：挂起 700ms 计时、代次作废上一次挂起、到期自动执行 `ApplyPowerAsync()`。初始化回填期间与本机提交期间调用**静默忽略**（不报错、不排队）。**前端不需要在 XAML 里引用它** —— 由 View 层代码调用。 |
-
-> **前端影响：无。** `OnPowerSelectionChanged` / `OnParkingValueChanged` 的名称与签名均未变化，XAML 绑定无需改动。
+> **本节描述的电源策略能力已在批次 A-2 移除**，待批次四 UI 重写时重新定义。原内容为电源计划 / 升频模式 / 核心停放的提交时机与 `SchedulePowerApply()` 防抖说明，支撑它们的 Core 类型已不存在，不再构成有效契约。
 
 ### 4.2 同步（刷新）的草稿语义（v1.3 新增）
 
@@ -266,7 +242,7 @@
 
 ### 5.1 多语言与样式
 - 前端使用 `x:Uid` 绑定资源，**后端不硬编码中文字符串**（VM 内中文仅用于状态提示文案，属展示数据，不动它）。
-- 数值输入：**纯 `TextBox`**（样式 `AppTextBoxMono`，34px / Consolas / 居中 / `MaxLength`），**不是** NumberBox——契约入口是 `EditText` / `FMaxText` / `ParkingText` 三个容错字符串属性。停放另有 `Slider`（0~100，步进 5）。
+- 数值输入：**纯 `TextBox`**（样式 `AppTextBoxMono`，34px / Consolas / 居中 / `MaxLength`），**不是** NumberBox——契约入口是 `EditText` / `FMaxText` / `ParkingText`【A-2 后已移除】 三个容错字符串属性。停放另有 `Slider`（0~100，步进 5）【A-2 后已移除】。
 - **数值输入不得用 `<ControlTemplate>` 重写 `TextBox`**（红线②）：加减号一律用 `Grid` 叠加「纯 `TextBox` + 左右两个 `Button`」实现，命令直接 `Command=` 绑定在按钮上。
 - 下拉框：必须用自定义 `ctl:AppComboBox`（深浅自适应），**禁止系统默认白底 ComboBox**。
 - `bool → Visibility` 一律走 `UiConverters.ToVisibleWhenTrue / ToVisibleWhenFalse / ToCollapsedWhenTrue` 编译期函数；`UiSeverity → InfoBarSeverity` 走 `UiConverters.ToInfoBarSeverity`。**不引 IValueConverter 进资源字典**。
@@ -309,6 +285,16 @@
 ---
 
 ## 7. 契约变更登记（新增属性必须走此流程）
+
+**v1.6 变更记录（2026-11-01，人类批准）**：
+
+> 本次新增 **2 个只读展示属性**，**未改动 / 未删除 / 未重命名任何既有属性或命令**，命令参数、步长、钳制范围、绑定语义全部不变。
+
+| 提案项 | 类型 | 用途 | 落地状态 |
+| :--- | :--- | :--- | :--- |
+| `CpuTitle` / `CpuDetail` | 新增 2 个只读展示属性（`string`） | CPU 主标题（型号）与副标题（规格 · SMU 状态）分行显示 | ✅ **已落地**（`TuningViewModel` 派生属性，随 `CpuName` / `SmuStateText` 自动刷新） |
+| `AppComboBox.DisplayText` | 前端控件自有属性（**不进 ViewModel 契约**） | ComboBox 基类会在运行时覆写 `ContentPresenter.Content`，模板绑 `SelectionBoxItem` 会被写成 null，导致合上空白 | ✅ **已落地**（`AppComboBox` 内部维护纯文本通道，模板改用 `TextBlock` 显示） |
+| 其余 5 项视觉修复 | 前端样式 / 视图层（**不动任何契约条目**） | 数值绝对居中、滑块 thumb 实心同色、下拉弹层去亮蓝底与带箭头滚动条、系统标题栏三键隐藏、页面滚动条极细 | ✅ **已落地**（全部在 `Tokens.xaml` / `Controls.xaml` / `MainWindow.xaml.cs` / `TuningPage.xaml`） |
 
 **v1.5 变更记录（2026-11-01，人类批准）**：
 
